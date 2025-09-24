@@ -67,18 +67,17 @@ network_parameters["mtl_sparse_sparsity"] = torch.tensor([0.1])
 network_parameters["mtl_sparse_sparsity_sleep"] = torch.tensor([0.05])
 network_parameters["mtl_sparse_subregions_b"] = [0.3]
 
-network_parameters["mtl_dense_sen_projection"] = False
-network_parameters["mtl_dense_sen_sparsity"] = 0.5
-
 
 ####################
 #synaptic parameters
 ####################
 
+network_parameters["mtl_dense_sen_projection"] = False
+network_parameters["mtl_dense_sen_sparsity"] = 0.5
 
 network_parameters["ctx_mtl_std"] = 0.0005
 network_parameters["ctx_mtl_lmbda"] = 5e-4
-network_parameters["ctx_mtl_size"] = 2
+#network_parameters["ctx_mtl_size"] = 2
 network_parameters["max_pre_ctx_mtl"] = np.inf
 network_parameters["max_post_ctx_mtl"] = 1
 

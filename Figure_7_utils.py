@@ -11,7 +11,7 @@ import random
 from collections import OrderedDict
 
 
-from model import SSCNetwork
+from src.model import SSCNetwork
 from src.utils.general import make_input, LatentSpace, get_ordered_indices, get_accuracy, test_network
 from src.utils.general_old import get_selectivity, get_cos_sim_torch, get_selectivity_accuracy
 
@@ -57,8 +57,7 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     input_params["num_days"] = 500
     input_params["day_length"] = 80
     input_params["mean_duration"] = 5
-    input_params["num_swaps"] = 4
-    #latent_specs["prob_list"] = [1/25 for i in range(5) for j in range(5)]
+    input_params["num_swaps"] = 2
     latent_specs["prob_list"] = [0.5/5 if i==j else 0.5/20 for i in range(5) for j in range(5)]
 
     input_params["latent_space"] = LatentSpace(**latent_specs)
