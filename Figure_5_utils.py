@@ -105,8 +105,8 @@ def blocked_interleaved(network_parameters, recording_parameters, input_params, 
 
     
     X_ctx = torch.stack(network.activity_recordings["ctx"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
-    X_mtl_sparse = torch.stack(network.activity_recordings["mtl_sparse"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
-    X_mtl_dense = torch.stack(network.activity_recordings["mtl_dense"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
+    X_mtl_semantic = torch.stack(network.activity_recordings["mtl_semantic"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
+    X_mtl_sensory = torch.stack(network.activity_recordings["mtl_sensory"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
 
     X_latent_A = F.one_hot(input_latents[-100:, :, 0].long(), num_classes=latent_specs["dims"][0])
     X_latent_B = F.one_hot(input_latents[-100:, :, 1].long(), num_classes=latent_specs["dims"][1])
@@ -114,15 +114,15 @@ def blocked_interleaved(network_parameters, recording_parameters, input_params, 
 
 
     selectivity_ctx, ordered_indices_ctx = get_ordered_indices(X_ctx, X_latent_AB, assembly_size=10)
-    selectivity_mtl_sparse, ordered_indices_mtl_sparse = get_ordered_indices(X_mtl_sparse, X_latent_AB, assembly_size=5)
-    selectivity_mtl_dense, ordered_indices_mtl_dense = get_ordered_indices(X_mtl_dense, X_latent_AB, assembly_size=10)
+    selectivity_mtl_semantic, ordered_indices_mtl_semantic = get_ordered_indices(X_mtl_semantic, X_latent_AB, assembly_size=5)
+    selectivity_mtl_sensory, ordered_indices_mtl_sensory = get_ordered_indices(X_mtl_sensory, X_latent_AB, assembly_size=10)
 
 
-    accuracy = get_accuracy(X_mtl_sparse[:, ordered_indices_mtl_sparse[:50]], input_latents.reshape((-1, 2)), assembly_size=5)
+    accuracy = get_accuracy(X_mtl_semantic[:, ordered_indices_mtl_semantic[:50]], input_latents.reshape((-1, 2)), assembly_size=5)
 
 
     if get_network:
-      return network, input, input_latents, input_episodes, ordered_indices_ctx, ordered_indices_mtl_dense, ordered_indices_mtl_sparse, selectivity_ctx, selectivity_mtl_dense, selectivity_mtl_sparse, accuracy
+      return network, input, input_latents, input_episodes, ordered_indices_ctx, ordered_indices_mtl_sensory, ordered_indices_mtl_semantic, selectivity_ctx, selectivity_mtl_sensory, selectivity_mtl_semantic, accuracy
     else:     
-      return selectivity_mtl_sparse, accuracy
+      return selectivity_mtl_semantic, accuracy
 
