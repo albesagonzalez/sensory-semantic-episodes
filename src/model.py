@@ -20,8 +20,8 @@ class SSCNetwork(nn.Module):
         #this resests the network quick connections at the beginning of each day
         if self.reset_dayly:
             self.mtl_mtl = torch.zeros((self.mtl_size, self.mtl_size))
-            self.mtl_sparse_mtl_sparse = torch.zeros((self.mtl_sparse_size, self.mtl_sparse_size))
-            self.mtl_dense_mtl_dense =  torch.zeros((self.mtl_dense_size, self.mtl_dense_size))
+            self.mtl_semantic_mtl_semantic = torch.zeros((self.mtl_semantic_size, self.mtl_semantic_size))
+            self.mtl_sensory_mtl_sensory =  torch.zeros((self.mtl_sensory_size, self.mtl_sensory_size))
 
           
         #iterate over every timestep in the input sequence (day)
@@ -30,17 +30,17 @@ class SSCNetwork(nn.Module):
             #activate sensory
             self.sen, _ = self.activation(input[timestep], 'sen')
 
-            #sensory to mtl_dense
-            self.mtl_dense_hat = F.linear(self.sen, self.mtl_dense_sen)
-            self.mtl_dense, _ = self.activation(self.mtl_dense_hat, 'mtl_dense')
+            #sensory to mtl_sensory
+            self.mtl_sensory_hat = F.linear(self.sen, self.mtl_sensory_sen)
+            self.mtl_sensory, _ = self.activation(self.mtl_sensory_hat, 'mtl_sensory')
 
-            #mtl_sparse is initialized at random
-            self.mtl_sparse_hat = torch.randn(self.mtl_sparse_size)
-            self.mtl_sparse, _ = self.activation(self.mtl_sparse_hat, 'mtl_sparse')
+            #mtl_semantic is initialized at random
+            self.mtl_semantic_hat = torch.randn(self.mtl_semantic_size)
+            self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
 
             #set full mtl
-            self.mtl[:self.mtl_dense_size] = self.mtl_dense
-            self.mtl[self.mtl_dense_size:] = self.mtl_sparse
+            self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
+            self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
  
             '''
             #mtl to ctx
@@ -49,35 +49,35 @@ class SSCNetwork(nn.Module):
             '''
             #'''
             #mtl to ctx
-            self.ctx_hat = F.linear(self.mtl[:self.mtl_dense_size], self.ctx_mtl[:, :self.mtl_dense_size]) + self.ctx_b*self.ctx_IM
+            self.ctx_hat = F.linear(self.mtl[:self.mtl_sensory_size], self.ctx_mtl[:, :self.mtl_sensory_size]) + self.ctx_b*self.ctx_IM
             self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
             #'''
 
 
-            #if CTX is developed (after phase A), pattern complete ctx and ctx to mtl_sparse
+            #if CTX is developed (after phase A), pattern complete ctx and ctx to mtl_semantic
             if self.day >= self.duration_phase_A:
                #self.ctx = self.pattern_complete('ctx', self.ctx)
-               self.mtl_sparse_hat = F.linear(self.ctx, self.mtl_sparse_ctx) + self.mtl_sparse_b*self.mtl_sparse_IM
-               self.mtl_sparse, _ = self.activation(self.mtl_sparse_hat, 'mtl_sparse')
-               self.mtl[self.mtl_dense_size:] = self.mtl_sparse
+               self.mtl_semantic_hat = F.linear(self.ctx, self.mtl_semantic_ctx) + self.mtl_semantic_b*self.mtl_semantic_IM
+               self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
+               self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
 
-              #only after phase A mtl_sparse_mtl_sparse is used
-               self.hebbian('mtl_sparse', 'mtl_sparse')
-               self.homeostasis('mtl_sparse', 'mtl_sparse')
+              #only after phase A mtl_semantic_mtl_semantic is used
+               self.hebbian('mtl_semantic', 'mtl_semantic')
+               self.homeostasis('mtl_semantic', 'mtl_semantic')
 
-            #if MTL is developed (after phase B), mtl_sparse to ctx
+            #if MTL is developed (after phase B), mtl_semantic to ctx
             if self.day >= self.duration_phase_B:
                self.ctx_hat = F.linear(self.mtl, self.ctx_mtl)
                self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
 
 
-            #learn mtl_mtl, mtl_dense_mtl_dense and ctx_ctx
+            #learn mtl_mtl, mtl_sensory_mtl_sensory and ctx_ctx
 
             self.hebbian('mtl', 'mtl')
             self.homeostasis('mtl', 'mtl')
 
-            self.hebbian('mtl_dense', 'mtl_dense')
-            self.homeostasis('mtl_dense', 'mtl_dense')
+            self.hebbian('mtl_sensory', 'mtl_sensory')
+            self.homeostasis('mtl_sensory', 'mtl_sensory')
 
             self.hebbian('ctx', 'ctx')
             self.homeostasis('ctx', 'ctx')
@@ -96,13 +96,13 @@ class SSCNetwork(nn.Module):
       
       #we start with episodic replay
       for timestep in range(self.sleep_duration_A):
-        #if mtl_sparse is not developed (before duration phase B), we use mtl_dense
+        #if mtl_semantic is not developed (before duration phase B), we use mtl_sensory
         if self.day <= self.duration_phase_B:
-          mtl_dense_random = torch.randn(self.mtl_dense_size)
-          #mtl_dense_random = torch.randn(self.mtl_dense_size)
-          self.mtl_dense = self.pattern_complete('mtl_dense', h_0=mtl_dense_random, sleep=True)
-          self.mtl[:self.mtl_dense_size] = self.mtl_dense
-          self.mtl[self.mtl_dense_size:] = 0
+          mtl_sensory_random = torch.randn(self.mtl_sensory_size)
+          #mtl_sensory_random = torch.randn(self.mtl_sensory_size)
+          self.mtl_sensory = self.pattern_complete('mtl_sensory', h_0=mtl_sensory_random, sleep=True)
+          self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
+          self.mtl[self.mtl_sensory_size:] = 0
           self.ctx_hat = F.linear(self.mtl, self.ctx_mtl) + self.ctx_b*self.ctx_IM
           self.ctx, _ = self.activation(self.ctx_hat, 'ctx', subregion_index=0, sleep=True)
 
@@ -136,12 +136,12 @@ class SSCNetwork(nn.Module):
           ctx_random = torch.randn(self.ctx_size)
           self.ctx = self.pattern_complete('ctx', h_0=ctx_random, subregion_index=0, sleep=True)
 
-          self.mtl_sparse_hat = F.linear(self.ctx, self.mtl_sparse_ctx) + self.mtl_sparse_b*self.mtl_sparse_IM
-          self.mtl_sparse, _ = self.activation(self.mtl_sparse_hat, 'mtl_sparse', sleep=True)
-          self.mtl[self.mtl_dense_size:] = self.mtl_sparse
+          self.mtl_semantic_hat = F.linear(self.ctx, self.mtl_semantic_ctx) + self.mtl_semantic_b*self.mtl_semantic_IM
+          self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic', sleep=True)
+          self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
 
-          self.hebbian('mtl_sparse', 'ctx')
-          self.homeostasis('mtl_sparse', 'ctx')
+          self.hebbian('mtl_semantic', 'ctx')
+          self.homeostasis('mtl_semantic', 'ctx')
 
           self.record()
           self.time_index += 1
@@ -189,17 +189,17 @@ class SSCNetwork(nn.Module):
 
     def mtl_generate(self, semantic_charge, num_iterations=None):
         num_iterations = num_iterations  if num_iterations != None else getattr(self, 'mtl_generate_pattern_complete_iterations')
-        #mtl_sparse_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_sparse_sparsity.clone()
-        #h_random_sparse = torch.randn(self.mtl_sparse_size)
-        #h_sparse = self.pattern_complete('mtl_sparse', h_0=h_random_sparse, num_iterations=num_iterations, sparsity=mtl_sparse_sparsity)
+        #mtl_semantic_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_semantic_sparsity.clone()
+        #h_random_semantic = torch.randn(self.mtl_semantic_size)
+        #h_semantic = self.pattern_complete('mtl_semantic', h_0=h_random_semantic, num_iterations=num_iterations, sparsity=mtl_semantic_sparsity)
         mtl_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_sparsity.clone()
         #h_conditioned = torch.zeros(self.mtl_size)
-        #h_conditioned[self.mtl_dense_size:] = h_sparse
+        #h_conditioned[self.mtl_sensory_size:] = h_semantic
         
         #h_random = torch.randn(self.mtl_size)
         h_random = torch.randn(self.mtl_size)
 
-        #h_random[self.mtl_dense_size:] = h_sparse
+        #h_random[self.mtl_sensory_size:] = h_semantic
         h = self.pattern_complete('mtl', h_0=h_random, h_conditioned=None, num_iterations=num_iterations, sparsity=mtl_sparsity)
         return h
 
@@ -212,7 +212,7 @@ class SSCNetwork(nn.Module):
           w =  getattr(self, w_name)
           lmbda = getattr(self, w_name + '_lmbda')
 
-          if w_name in {'ctx_mtl', 'mtl_sparse_ctx'}:
+          if w_name in {'ctx_mtl', 'mtl_semantic_ctx'}:
             IM = getattr(self, post_region + '_IM')
             IM_lmbda = getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
             lmbda = lmbda*(1 - IM) + IM_lmbda*IM
@@ -248,7 +248,7 @@ class SSCNetwork(nn.Module):
           w *= post_scaling_factors.unsqueeze(1)
           setattr(self, w_name, w)
 
-          if w_name in {"ctx_mtl", "mtl_sparse_ctx"}:
+          if w_name in {"ctx_mtl", "mtl_semantic_ctx"}:
             setattr(self, post_region + '_IM', (total_post_connectivity.round() < max_post_connectivity).float())
 
           w = getattr(self, w_name)
@@ -316,30 +316,30 @@ class SSCNetwork(nn.Module):
 
       #define subnetworks
       self.sen = torch.zeros((self.sen_size))
-      self.mtl_dense_hat = torch.zeros((self.mtl_dense_size))
-      self.mtl_sparse_hat = torch.zeros((self.mtl_sparse_size))
-      self.mtl_sparse = torch.zeros((self.mtl_sparse_size))
-      self.mtl_dense = torch.zeros((self.mtl_dense_size))
+      self.mtl_sensory_hat = torch.zeros((self.mtl_sensory_size))
+      self.mtl_semantic_hat = torch.zeros((self.mtl_semantic_size))
+      self.mtl_semantic = torch.zeros((self.mtl_semantic_size))
+      self.mtl_sensory = torch.zeros((self.mtl_sensory_size))
       self.mtl_hat = torch.zeros((self.mtl_size))
       self.mtl = torch.zeros((self.mtl_size))
       self.ctx_hat = torch.zeros((self.ctx_size))
       self.ctx = torch.zeros((self.ctx_size))
 
       #define connectivity
-      self.mtl_dense_mtl_dense = torch.zeros((self.mtl_dense_size, self.mtl_dense_size))
-      self.mtl_sparse_mtl_sparse = torch.zeros((self.mtl_sparse_size, self.mtl_sparse_size))
+      self.mtl_sensory_mtl_sensory = torch.zeros((self.mtl_sensory_size, self.mtl_sensory_size))
+      self.mtl_semantic_mtl_semantic = torch.zeros((self.mtl_semantic_size, self.mtl_semantic_size))
       self.mtl_mtl = torch.zeros((self.mtl_size, self.mtl_size))
 
       self.ctx_ctx = torch.zeros((self.ctx_size, self.ctx_size))
 
-      if self.mtl_dense_sen_projection:
-        self.mtl_dense_sen = torch.zeros((self.mtl_dense_size, self.sen_size))
-        for post_neuron in range(self.mtl_dense_size):
-          self.mtl_dense_sen[post_neuron, torch.randperm(self.sen_size)[:self.mtl_dense_sen_size]] = self.max_post_mtl_dense_sen/self.mtl_dense_sen_size
-        self.mtl_dense_sen = self.mtl_dense_sen.clone()
+      if self.mtl_sensory_sen_projection:
+        self.mtl_sensory_sen = torch.zeros((self.mtl_sensory_size, self.sen_size))
+        for post_neuron in range(self.mtl_sensory_size):
+          self.mtl_sensory_sen[post_neuron, torch.randperm(self.sen_size)[:self.mtl_sensory_sen_size]] = self.max_post_mtl_sensory_sen/self.mtl_sensory_sen_size
+        self.mtl_sensory_sen = self.mtl_sensory_sen.clone()
 
       else:
-        self.mtl_dense_sen = torch.eye(self.sen_size)
+        self.mtl_sensory_sen = torch.eye(self.sen_size)
 
 
       self.ctx_IM = torch.ones((self.ctx_size)) 
@@ -349,11 +349,11 @@ class SSCNetwork(nn.Module):
       self.ctx_mtl_IM_lmbda = self.ctx_mtl_lmbda
       self.ctx_mtl = torch.randn((self.ctx_size, self.mtl_size))*self.ctx_mtl_std
     
-      self.mtl_sparse_IM = torch.ones((self.mtl_sparse_size)) 
-      self.mtl_sparse_b = torch.zeros((self.mtl_sparse_size))
-      for subregion, subregion_b in zip(self.mtl_sparse_subregions, self.mtl_sparse_subregions_b):
-        self.mtl_sparse_b[subregion] = subregion_b
-      self.mtl_sparse_ctx = torch.randn((self.mtl_sparse_size, self.ctx_size))*self.mtl_sparse_ctx_std
+      self.mtl_semantic_IM = torch.ones((self.mtl_semantic_size)) 
+      self.mtl_semantic_b = torch.zeros((self.mtl_semantic_size))
+      for subregion, subregion_b in zip(self.mtl_semantic_subregions, self.mtl_semantic_subregions_b):
+        self.mtl_semantic_b[subregion] = subregion_b
+      self.mtl_semantic_ctx = torch.randn((self.mtl_semantic_size, self.ctx_size))*self.mtl_semantic_ctx_std
 
       #initialize day count
       self.day = 0

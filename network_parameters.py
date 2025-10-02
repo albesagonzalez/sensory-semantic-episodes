@@ -23,13 +23,13 @@ network_parameters["sleep_duration_B"] = 10
 network_parameters["reset_dayly"] = True
 
 #network regions
-network_parameters["regions"] = ["sen", "mtl_sparse", "mtl_dense", "mtl", "ctx"]
+network_parameters["regions"] = ["sen", "mtl_semantic", "mtl_sensory", "mtl", "ctx"]
 
 
 #number of pattern complete operations
 network_parameters["mtl_pattern_complete_iterations"] = 10
-network_parameters["mtl_dense_pattern_complete_iterations"] = 10
-network_parameters["mtl_sparse_pattern_complete_iterations"] = 10
+network_parameters["mtl_sensory_pattern_complete_iterations"] = 10
+network_parameters["mtl_semantic_pattern_complete_iterations"] = 10
 network_parameters["ctx_pattern_complete_iterations"] = 10
 network_parameters["mtl_generate_pattern_complete_iterations"] = 10
 
@@ -56,24 +56,24 @@ network_parameters["mtl_size_subregions"] =  torch.tensor([100, 100])
 network_parameters["mtl_sparsity"] = torch.tensor([0.2, 0.1])
 network_parameters["mtl_sparsity_sleep"] = torch.tensor([0.1, 0.05])
 
-network_parameters["mtl_dense_num_subregions"] = 1
-network_parameters["mtl_dense_size_subregions"] = torch.tensor([100])
-network_parameters["mtl_dense_sparsity"] = torch.tensor([0.2])
-network_parameters["mtl_dense_sparsity_sleep"] = torch.tensor([0.1])
+network_parameters["mtl_sensory_num_subregions"] = 1
+network_parameters["mtl_sensory_size_subregions"] = torch.tensor([100])
+network_parameters["mtl_sensory_sparsity"] = torch.tensor([0.2])
+network_parameters["mtl_sensory_sparsity_sleep"] = torch.tensor([0.1])
 
-network_parameters["mtl_sparse_num_subregions"] = 1
-network_parameters["mtl_sparse_size_subregions"] = torch.tensor([100])
-network_parameters["mtl_sparse_sparsity"] = torch.tensor([0.1])
-network_parameters["mtl_sparse_sparsity_sleep"] = torch.tensor([0.05])
-network_parameters["mtl_sparse_subregions_b"] = [0.3]
+network_parameters["mtl_semantic_num_subregions"] = 1
+network_parameters["mtl_semantic_size_subregions"] = torch.tensor([100])
+network_parameters["mtl_semantic_sparsity"] = torch.tensor([0.1])
+network_parameters["mtl_semantic_sparsity_sleep"] = torch.tensor([0.05])
+network_parameters["mtl_semantic_subregions_b"] = [0.3]
 
 
 ####################
 #synaptic parameters
 ####################
 
-network_parameters["mtl_dense_sen_projection"] = False
-network_parameters["mtl_dense_sen_sparsity"] = 0.5
+network_parameters["mtl_sensory_sen_projection"] = False
+network_parameters["mtl_sensory_sen_sparsity"] = 0.5
 
 network_parameters["ctx_mtl_std"] = 0.0005
 network_parameters["ctx_mtl_lmbda"] = 5e-4
@@ -85,19 +85,19 @@ network_parameters["mtl_mtl_lmbda"] = 5e-3
 network_parameters["max_pre_mtl_mtl"] = np.inf
 network_parameters["max_post_mtl_mtl"] = np.inf
 
-network_parameters["mtl_dense_mtl_dense_lmbda"] = 5e-3
-network_parameters["max_pre_mtl_dense_mtl_dense"] = np.inf
-network_parameters["max_post_mtl_dense_mtl_dense"] = np.inf
+network_parameters["mtl_sensory_mtl_sensory_lmbda"] = 5e-3
+network_parameters["max_pre_mtl_sensory_mtl_sensory"] = np.inf
+network_parameters["max_post_mtl_sensory_mtl_sensory"] = np.inf
 
-network_parameters["mtl_sparse_mtl_sparse_lmbda"] = 5e-3
-network_parameters["max_pre_mtl_sparse_mtl_sparse"] = np.inf
-network_parameters["max_post_mtl_sparse_mtl_sparse"] = np.inf
+network_parameters["mtl_semantic_mtl_semantic_lmbda"] = 5e-3
+network_parameters["max_pre_mtl_semantic_mtl_semantic"] = np.inf
+network_parameters["max_post_mtl_semantic_mtl_semantic"] = np.inf
 
 network_parameters["ctx_ctx_lmbda"] = 5e-4
 network_parameters["max_pre_ctx_ctx"] = 1
 network_parameters["max_post_ctx_ctx"] = np.inf
 
-network_parameters["mtl_sparse_ctx_std"] = 0.001
-network_parameters["mtl_sparse_ctx_lmbda"] = 5e-3
-network_parameters["max_pre_mtl_sparse_ctx"] = np.inf
-network_parameters["max_post_mtl_sparse_ctx"] = 1
+network_parameters["mtl_semantic_ctx_std"] = 0.001
+network_parameters["mtl_semantic_ctx_lmbda"] = 5e-3
+network_parameters["max_pre_mtl_semantic_ctx"] = np.inf
+network_parameters["max_post_mtl_semantic_ctx"] = 1
