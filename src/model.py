@@ -1,6 +1,3 @@
-
-import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,17 +38,11 @@ class SSCNetwork(nn.Module):
             #set full mtl
             self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
             self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
- 
-            '''
-            #mtl to ctx
-            self.ctx_hat = F.linear(self.mtl, self.ctx_mtl) + self.ctx_b*self.ctx_IM
-            self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
-            '''
-            #'''
+
             #mtl to ctx
             self.ctx_hat = F.linear(self.mtl[:self.mtl_sensory_size], self.ctx_mtl[:, :self.mtl_sensory_size]) + self.ctx_b*self.ctx_IM
             self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
-            #'''
+
 
 
             #if CTX is developed (after phase A), pattern complete ctx and ctx to mtl_semantic
@@ -86,8 +77,6 @@ class SSCNetwork(nn.Module):
             self.time_index += 1
             self.awake_indices.append(self.time_index)
         self.day += 1
-
-
     
 
     def sleep(self):
@@ -109,9 +98,6 @@ class SSCNetwork(nn.Module):
           self.hebbian('ctx', 'mtl')
           self.homeostasis('ctx', 'mtl')
 
-          #if self.day >= self.duration_phase_A:
-          #      self.ctx = self.pattern_complete('ctx', self.ctx, sleep=True)
-
         else:
           semantic_charge = torch.randint(low=1, high=self.max_semantic_charge_replay+1, size=(1,))[0]
           self.mtl = self.mtl_generate(semantic_charge)
@@ -120,10 +106,6 @@ class SSCNetwork(nn.Module):
 
           self.hebbian('ctx', 'mtl')
           self.homeostasis('ctx', 'mtl')
-
-
-        #self.hebbian('ctx', 'ctx')
-        #self.homeostasis('ctx', 'ctx')
 
         self.record()
         self.time_index += 1
@@ -189,17 +171,8 @@ class SSCNetwork(nn.Module):
 
     def mtl_generate(self, semantic_charge, num_iterations=None):
         num_iterations = num_iterations  if num_iterations != None else getattr(self, 'mtl_generate_pattern_complete_iterations')
-        #mtl_semantic_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_semantic_sparsity.clone()
-        #h_random_semantic = torch.randn(self.mtl_semantic_size)
-        #h_semantic = self.pattern_complete('mtl_semantic', h_0=h_random_semantic, num_iterations=num_iterations, sparsity=mtl_semantic_sparsity)
         mtl_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_sparsity.clone()
-        #h_conditioned = torch.zeros(self.mtl_size)
-        #h_conditioned[self.mtl_sensory_size:] = h_semantic
-        
-        #h_random = torch.randn(self.mtl_size)
         h_random = torch.randn(self.mtl_size)
-
-        #h_random[self.mtl_sensory_size:] = h_semantic
         h = self.pattern_complete('mtl', h_0=h_random, h_conditioned=None, num_iterations=num_iterations, sparsity=mtl_sparsity)
         return h
 

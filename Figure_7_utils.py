@@ -5,11 +5,7 @@ import numpy as np
 import torch.nn.functional as F
 
 
-from copy import deepcopy
-import itertools
 import random
-from collections import OrderedDict
-
 
 from src.model import SSCNetwork
 from src.utils.general import make_input, LatentSpace, get_ordered_indices, get_accuracy, test_network
