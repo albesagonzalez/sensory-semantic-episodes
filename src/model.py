@@ -98,7 +98,8 @@ class SSCNetwork(nn.Module):
       for timestep in range(self.sleep_duration_A):
         #if mtl_sparse is not developed (before duration phase B), we use mtl_dense
         if self.day <= self.duration_phase_B:
-          mtl_dense_random = torch.randn(self.mtl_dense_size)**2
+          mtl_dense_random = torch.randn(self.mtl_dense_size)
+          #mtl_dense_random = torch.randn(self.mtl_dense_size)
           self.mtl_dense = self.pattern_complete('mtl_dense', h_0=mtl_dense_random, sleep=True)
           self.mtl[:self.mtl_dense_size] = self.mtl_dense
           self.mtl[self.mtl_dense_size:] = 0
@@ -148,7 +149,7 @@ class SSCNetwork(nn.Module):
 
     def activation(self, x, region, x_conditioned=None, subregion_index=None, sleep=False, sparsity=None):
       #we add a small variance to the network pre-activation in case some activities are even, so these are activated randomly.
-      x = x + (1e-10 + torch.max(x) - torch.min(x))/100*torch.randn(x.shape)
+      x = x + (1e-10 + torch.max(x) - torch.min(x))/100000*torch.randn(x.shape)
 
       if x_conditioned is not None:
          x[x_conditioned==1] = torch.max(x) + 1
@@ -194,7 +195,10 @@ class SSCNetwork(nn.Module):
         mtl_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_sparsity.clone()
         #h_conditioned = torch.zeros(self.mtl_size)
         #h_conditioned[self.mtl_dense_size:] = h_sparse
+        
+        #h_random = torch.randn(self.mtl_size)
         h_random = torch.randn(self.mtl_size)
+
         #h_random[self.mtl_dense_size:] = h_sparse
         h = self.pattern_complete('mtl', h_0=h_random, h_conditioned=None, num_iterations=num_iterations, sparsity=mtl_sparsity)
         return h
