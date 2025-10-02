@@ -13,7 +13,6 @@ from collections import OrderedDict
 
 from src.model import SSCNetwork
 from src.utils.general import make_input, LatentSpace, get_ordered_indices, get_accuracy, test_network
-from src.utils.general_old import get_selectivity, get_cos_sim_torch, get_selectivity_accuracy
 
 
 def seed_everything(seed=42):
@@ -39,12 +38,12 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
 
     if mode == 'scrambled':
         # Generate independent permutations for each row
-        perms = torch.argsort(torch.rand_like(network.mtl_sparse_ctx), dim=1)
+        perms = torch.argsort(torch.rand_like(network.mtl_semantic_ctx), dim=1)
         # Apply the permutations
-        network.mtl_sparse_ctx = torch.gather(network.mtl_sparse_ctx, dim=1, index=perms)
-        # Freeze ctx to mtl sparse connections
-        network.mtl_sparse_ctx_lmbda = 0
-        network.mtl_sparse_b[:] = -1
+        network.mtl_semantic_ctx = torch.gather(network.mtl_semantic_ctx, dim=1, index=perms)
+        # Freeze ctx to mtl semantic connections
+        network.mtl_semantic_ctx_lmbda = 0
+        network.mtl_semantic_b[:] = -1
         
 
     network.max_semantic_charge_replay = 2
@@ -79,8 +78,8 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
 
 
     X_ctx = torch.stack(network.activity_recordings["ctx"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
-    X_mtl_sparse = torch.stack(network.activity_recordings["mtl_sparse"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
-    X_mtl_dense = torch.stack(network.activity_recordings["mtl_dense"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
+    X_mtl_semantic = torch.stack(network.activity_recordings["mtl_semantic"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
+    X_mtl_sensory = torch.stack(network.activity_recordings["mtl_sensory"], dim=0)[network.awake_indices][-100*input_params["day_length"]:]
 
     X_latent_A = F.one_hot(input_latents[-100:, :, 0].long(), num_classes=latent_specs["dims"][0])
     X_latent_B = F.one_hot(input_latents[-100:, :, 1].long(), num_classes=latent_specs["dims"][1])
@@ -89,14 +88,15 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     X_episodes = F.one_hot(input_episodes[-100:].long(), num_classes=np.prod(latent_specs["dims"]))
 
 
-    network.selectivity_ctx, network.ordered_indices_ctx = get_ordered_indices(X_ctx, X_latent_AB, assembly_size=10)
-    network.selectivity_mtl_sparse, network.ordered_indices_mtl_sparse = get_ordered_indices(X_mtl_sparse, X_latent_AB, assembly_size=5)
-    network.selectivity_mtl_dense, network.ordered_indices_mtl_dense = get_ordered_indices(X_mtl_dense, X_latent_AB, assembly_size=10)
-    network.selectivity_ctx_episodes, network.ordered_indices_ctx_episodes = get_ordered_indices(X_ctx, X_episodes, assembly_size=10)
+    network.selectivity_ctx, network.ordered_indices_ctx = get_ordered_indices(X_ctx[:, :100], X_latent_AB, assembly_size=10)
+    network.selectivity_mtl_semantic, network.ordered_indices_mtl_semantic = get_ordered_indices(X_mtl_semantic, X_latent_AB, assembly_size=5)
+    network.selectivity_mtl_sensory, network.ordered_indices_mtl_sensory = get_ordered_indices(X_mtl_sensory, X_latent_AB, assembly_size=10)
+    network.selectivity_ctx_episodes, network.ordered_indices_ctx_episodes = get_ordered_indices(X_ctx[:, 100:], X_episodes, assembly_size=10)
+    network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_episodes + 100
 
     if get_network:
         return network
     
     else:
-        return torch.mean(network.selectivity_ctx_episodes[network.ordered_indices_ctx_episodes].max(axis=1)[0][:250])
+        return torch.mean(network.selectivity_ctx_episodes[network.ordered_indices_ctx_episodes - 100].max(axis=1)[0][:250])
 

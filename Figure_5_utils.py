@@ -13,7 +13,6 @@ from collections import OrderedDict
 
 from src.model import SSCNetwork
 from src.utils.general import make_input, LatentSpace, get_ordered_indices, get_accuracy, test_network
-from src.utils.general_old import get_selectivity, get_cos_sim_torch, get_selectivity_accuracy
 
 
 def seed_everything(seed=42):
