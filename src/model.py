@@ -47,7 +47,6 @@ class SSCNetwork(nn.Module):
 
             #if CTX is developed (after phase A), pattern complete ctx and ctx to mtl_semantic
             if self.day >= self.duration_phase_A:
-               #self.ctx = self.pattern_complete('ctx', self.ctx)
                self.mtl_semantic_hat = F.linear(self.ctx, self.mtl_semantic_ctx) + self.mtl_semantic_b*self.mtl_semantic_IM
                self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
                self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
@@ -88,7 +87,6 @@ class SSCNetwork(nn.Module):
         #if mtl_semantic is not developed (before duration phase B), we use mtl_sensory
         if self.day <= self.duration_phase_B:
           mtl_sensory_random = torch.randn(self.mtl_sensory_size)
-          #mtl_sensory_random = torch.randn(self.mtl_sensory_size)
           self.mtl_sensory = self.pattern_complete('mtl_sensory', h_0=mtl_sensory_random, sleep=True)
           self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
           self.mtl[self.mtl_sensory_size:] = 0
@@ -111,6 +109,7 @@ class SSCNetwork(nn.Module):
         self.time_index += 1
         self.sleep_indices_A.append(self.time_index)
 
+      #then semantic replay
       if self.day >= self.duration_phase_A:
 
         for timestep in range(self.sleep_duration_B):

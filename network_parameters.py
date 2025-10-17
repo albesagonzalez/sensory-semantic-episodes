@@ -77,7 +77,6 @@ network_parameters["mtl_sensory_sen_sparsity"] = 0.5
 
 network_parameters["ctx_mtl_std"] = 0.0005
 network_parameters["ctx_mtl_lmbda"] = 5e-4
-#network_parameters["ctx_mtl_size"] = 2
 network_parameters["max_pre_ctx_mtl"] = np.inf
 network_parameters["max_post_ctx_mtl"] = 1
 
