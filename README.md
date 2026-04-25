@@ -9,7 +9,7 @@ This repository contains the code used to generate the analyses and figure panel
 
 - `Figure_*.ipynb` notebooks reproduce the main figure panels and analyses from the manuscript.
 - `Figure_*_utils.py` files provide the helper functions used by those notebooks.
-- `src/model_engrams.py` contains the main sensory-semantic episodic memory model.
+- `src/model.py` contains the main sensory-semantic episodic memory model.
 - `network_parameters.py` defines the model settings used across experiments.
 - `src/utils/` contains shared plotting and general utility functions.
 
