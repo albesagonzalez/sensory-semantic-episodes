@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
+*.py[cod]
+
+# Local environments
+.env
+.venv/
+venv/
+
+# Project outputs and large local artifacts
+checkpoints/*
+!checkpoints/.gitkeep
+Data/*
+!Data/.gitkeep
+Figures/*
+!Figures/.gitkeep
+Figures_SVG/*
+!Figures_SVG/.gitkeep
