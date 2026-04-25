@@ -832,7 +832,7 @@ def run_increase_overlap_experiment(
         5) Collect post-consolidation cue patterns.
         6) Compute overlap metrics and scene-decoding accuracy.
     """
-    from src.model_engrams import SSCNetwork
+    from model import SSCNetwork
 
     seed_everything(seed)
 
@@ -1111,7 +1111,7 @@ def run_synaptic_engrams_experiment(
         Network objects, engram cell indices, synaptic distributions, fear-input
         trajectory, stability metrics, and plot-ready activity snapshots.
     """
-    from src.model_engrams import SSCNetwork
+    from model import SSCNetwork
 
     seed_everything(seed)
     if int(record_rate_activity) != 1:

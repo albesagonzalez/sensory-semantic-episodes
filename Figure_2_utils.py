@@ -7,8 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-#from src.model import SSCNetwork
-from src.model_engrams import SSCNetwork
+from src.model import SSCNetwork
 
 
 from src.utils.general import LatentSpace, test_network
