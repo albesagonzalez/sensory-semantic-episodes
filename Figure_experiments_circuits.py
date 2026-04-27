@@ -676,7 +676,7 @@ def run_increase_overlap_experiment(
     sleep_duration_B=None,
     stop_after="recall",
 ):
-    from model import SSCNetwork
+    from src.model import SSCNetwork
 
     seed_everything(seed)
 
@@ -945,7 +945,7 @@ def run_synaptic_engrams_experiment(
     record_rate_activity=1,
     fear_probe_fraction=0.25,
 ):
-    from model import SSCNetwork
+    from src.model import SSCNetwork
 
     seed_everything(seed)
     if int(record_rate_activity) != 1:

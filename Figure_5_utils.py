@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from model import SSCNetwork
+from src.model import SSCNetwork
 from src.utils.general import (
     LatentSpace,
     get_max_overlap,
