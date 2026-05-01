@@ -88,7 +88,7 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
 
 
     network.selectivity_ctx, network.ordered_indices_ctx = get_ordered_indices(X_ctx[:, :100], X_latent_AB, assembly_size=10)
-    network.selectivity_mtl_semantic, network.ordered_indices_mtl_semantic = get_ordered_indices(X_mtl_semantic, X_latent_AB, assembly_size=5)
+    network.selectivity_mtl_semantic, network.ordered_indices_mtl_semantic = get_ordered_indices(X_mtl_semantic, X_latent_AB, assembly_size=10)
     network.selectivity_mtl_sensory, network.ordered_indices_mtl_sensory = get_ordered_indices(X_mtl_sensory, X_latent_AB, assembly_size=10)
     network.selectivity_ctx_episodes, network.ordered_indices_ctx_episodes = get_ordered_indices(X_ctx[:, 100:], X_episodes, assembly_size=10)
     network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_episodes + 100

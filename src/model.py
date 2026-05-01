@@ -124,7 +124,8 @@ class SSCNetwork(nn.Module):
             IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/ (self.ctx_size_subregions*self.ctx_sparsity).sum()
             lmbda = IM_lmbda*IM          
             lmbda = lmbda[None, :]
-            delta_ctx_ctx = lmbda*torch.outer(ctx_pointer_definition, ctx_pointer)
+            delta_ctx_ctx = 10*lmbda*torch.outer(ctx_pointer_definition, ctx_pointer)
+            self.ctx_pointer_definition = ctx_pointer_definition
             self.ctx_ctx += delta_ctx_ctx
 
 
@@ -240,7 +241,6 @@ class SSCNetwork(nn.Module):
               lmbda = IM_lmbda*IM
               lmbda = lmbda[None, :]
             else:
-              #lmbda = lmbda*torch.outer(1 - IM, 1 - IM)
               pass
 
           delta_w = torch.outer(getattr(self, post_region), getattr(self, pre_region))
