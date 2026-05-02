@@ -53,11 +53,9 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     network.connectivity_recordings_rate = np.inf
 
 
-    input_params["num_days"] = 500
+    input_params["num_days"] = 1000
     input_params["day_length"] = 80
     input_params["mean_duration"] = 5
-    latent_specs["prob_list"] = [0.5/5 if i==j else 0.5/20 for i in range(5) for j in range(5)]
-
     input_params["latent_space"] = LatentSpace(**latent_specs)
 
 

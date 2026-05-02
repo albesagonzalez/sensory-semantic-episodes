@@ -230,7 +230,7 @@ class SSCNetwork(nn.Module):
 
           if w_name in {'ctx_mtl', 'mtl_semantic_ctx'}:
             IM = getattr(self, post_region + '_IM')
-            IM_lmbda = getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
+            IM_lmbda = 10*getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
             lmbda = lmbda*(1 - IM) + IM_lmbda*IM
             lmbda = lmbda[:, None]
 
