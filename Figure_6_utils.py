@@ -32,6 +32,14 @@ class SparseHopfieldNetwork(nn.Module):
         )
         self.num_patterns_stored = 0
 
+    def _topk_project_mtl_sensory(self, x):
+        num_active = int(self.mtl_sensory_size * float(self.mtl_sensory_sparsity[0]))
+        num_active = max(num_active, 1)
+        top_indices = torch.topk(x, num_active).indices
+        h = torch.zeros_like(x)
+        h[top_indices] = 1.0
+        return h
+
     def forward(self, input, debug=False):
         del debug
 
@@ -76,7 +84,8 @@ class SparseHopfieldNetwork(nn.Module):
             field = F.linear(h - activity, self.mtl_sensory_mtl_sensory)
             h = (field > theta).float()
 
-        return h
+        final_field = F.linear(h - activity, self.mtl_sensory_mtl_sensory)
+        return self._topk_project_mtl_sensory(final_field)
 
 
 def sample_random_mtl_sensory_patterns(num_patterns, pattern_size, pattern_sparsity):
