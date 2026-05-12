@@ -18,6 +18,7 @@ from src.utils.general import (
     get_prototypes,
     make_input,
     test_network,
+    get_accuracy
 )
 
 
@@ -807,9 +808,9 @@ def measure_sleep_a_replay_episode_clustering(
         num_days=num_days,
         num_swaps=num_swaps,
     )
-    episode_prototypes = get_prototypes(
+    label_prototypes = get_prototypes(
         eval_input_params["latent_space"],
-        semantic_charge=2,
+        semantic_charge=semantic_charge,
     )
 
     eval_net = network
@@ -852,9 +853,9 @@ def measure_sleep_a_replay_episode_clustering(
             f"{replayed_mtl_sensory.shape[0]} vs {replayed_mtl_full.shape[0]}."
         )
 
-    episode_overlap, inferred_episode_indices = get_max_overlap(
+    label_overlap, inferred_label_indices = get_max_overlap(
         replayed_mtl_sensory,
-        episode_prototypes,
+        label_prototypes,
         return_indices=True,
     )
 
@@ -864,12 +865,12 @@ def measure_sleep_a_replay_episode_clustering(
     sim_same = []
     sim_different = []
     margins = []
-    inferred_episode_indices_cpu = inferred_episode_indices.detach().cpu()
+    inferred_label_indices_cpu = inferred_label_indices.detach().cpu()
 
     for replay_idx in range(replayed_mtl_full.shape[0]):
-        same_mask = inferred_episode_indices_cpu == inferred_episode_indices_cpu[replay_idx]
+        same_mask = inferred_label_indices_cpu == inferred_label_indices_cpu[replay_idx]
         same_mask[replay_idx] = False
-        different_mask = inferred_episode_indices_cpu != inferred_episode_indices_cpu[replay_idx]
+        different_mask = inferred_label_indices_cpu != inferred_label_indices_cpu[replay_idx]
 
         if (not bool(same_mask.any().item())) or (not bool(different_mask.any().item())):
             continue
@@ -887,7 +888,7 @@ def measure_sleep_a_replay_episode_clustering(
         num_stored_recordings=num_stored_recordings,
     )
     stored_recordings_full = replayed_mtl_full[stored_recording_indices].detach().cpu().clone()
-    stored_recording_episode_indices = inferred_episode_indices_cpu[stored_recording_indices].clone()
+    stored_recording_label_indices = inferred_label_indices_cpu[stored_recording_indices].clone()
 
     margins_tensor = torch.tensor(margins, dtype=torch.float32)
     if verbose:
@@ -909,9 +910,13 @@ def measure_sleep_a_replay_episode_clustering(
         "stored_recordings": stored_recordings_sensory,
         "stored_recordings_mtl": stored_recordings_full,
         "stored_recording_indices": stored_recording_indices,
-        "stored_recording_episode_indices": stored_recording_episode_indices,
-        "replay_episode_overlap": episode_overlap.detach().cpu(),
-        "inferred_replay_episodes": inferred_episode_indices_cpu.clone(),
+        "stored_recording_label_indices": stored_recording_label_indices,
+        "replay_label_overlap": label_overlap.detach().cpu(),
+        "inferred_replay_labels": inferred_label_indices_cpu.clone(),
+        # Backward-compatible aliases retained for existing notebook cells.
+        "stored_recording_episode_indices": stored_recording_label_indices,
+        "replay_episode_overlap": label_overlap.detach().cpu(),
+        "inferred_replay_episodes": inferred_label_indices_cpu.clone(),
         "sim_same": torch.tensor(sim_same, dtype=torch.float32),
         "sim_different": torch.tensor(sim_different, dtype=torch.float32),
         "margins": margins_tensor,
@@ -937,6 +942,132 @@ def measure_sleep_a_awake_generalization_job(
     verbose=False,
 ):
     result = measure_sleep_a_awake_generalization(
+        network=deepcopy(network),
+        recording_parameters=recording_parameters,
+        input_params=input_params,
+        latent_specs=latent_specs,
+        num_swaps=num_swaps,
+        num_days=num_days,
+        semantic_charge=semantic_charge,
+        num_stored_recordings=num_stored_recordings,
+        seed=seed,
+        print_rate=print_rate,
+        verbose=verbose,
+        network_name=network_name,
+    )
+    result["network_name"] = network_name
+    result["seed"] = int(seed)
+    return result
+
+
+def measure_ctx_latent_accuracy(
+    network,
+    recording_parameters,
+    input_params,
+    latent_specs,
+    num_swaps,
+    num_days=50,
+    semantic_charge=1,
+    num_stored_recordings=0,
+    seed=None,
+    print_rate=np.inf,
+    verbose=False,
+    network_name=None,
+):
+    del recording_parameters, num_stored_recordings
+
+    if semantic_charge != 1:
+        raise ValueError("measure_ctx_latent_accuracy expects semantic_charge=1.")
+
+    if seed is not None:
+        seed_everything(seed)
+
+    eval_recording_parameters = {
+        "regions": ["ctx"],
+        "rate_activity": 1,
+        "connections": [],
+        "rate_connectivity": np.inf,
+    }
+    eval_net = deepcopy(network)
+    eval_net.init_recordings(eval_recording_parameters)
+    eval_net.frozen = True
+    eval_net.activity_recordings_rate = 1
+    eval_net.connectivity_recordings_rate = np.inf
+
+    eval_input_params = _make_input_params(
+        input_params,
+        latent_specs,
+        num_days=num_days,
+        num_swaps=num_swaps,
+    )
+    eval_input, _, eval_input_latents = make_input(**eval_input_params)
+
+    with torch.no_grad():
+        for day in range(eval_input_params["num_days"]):
+            if verbose and (
+                day == 0
+                or (day + 1) % max(int(print_rate), 1) == 0
+                or day == eval_input_params["num_days"] - 1
+            ):
+                print(
+                    f"[pid={os.getpid()}] ctx-accuracy"
+                    f" network={network_name} seed={seed} num_swaps={num_swaps}"
+                    f" day={day + 1}/{eval_input_params['num_days']}",
+                    flush=True,
+                )
+            eval_net(eval_input[day], debug=False)
+
+    X_ctx = torch.stack(eval_net.activity_recordings["ctx"], dim=0)[eval_net.awake_indices]
+    X_latent_A = F.one_hot(
+        eval_input_latents[:, :, 0].long(),
+        num_classes=latent_specs["dims"][0],
+    )
+    X_latent_B = F.one_hot(
+        eval_input_latents[:, :, 1].long(),
+        num_classes=latent_specs["dims"][1],
+    )
+    X_latent_AB = torch.cat((X_latent_A, X_latent_B), dim=2)
+    eval_latents_flat = eval_input_latents.reshape(-1, eval_input_latents.shape[-1])
+
+    selectivity_ctx, ordered_indices_ctx = get_ordered_indices(
+        X_ctx[:, :100],
+        X_latent_AB,
+        assembly_size=10,
+    )
+    ctx_accuracy = get_accuracy(
+        X_ctx[:, ordered_indices_ctx[:100]],
+        eval_latents_flat,
+        assembly_size=10,
+    )
+
+    return {
+        "num_swaps": int(num_swaps),
+        "num_days": int(num_days),
+        "semantic_charge": int(semantic_charge),
+        "ctx_accuracy_A": float(ctx_accuracy[0].item()),
+        "ctx_accuracy_B": float(ctx_accuracy[1].item()),
+        "ctx_accuracy_mean": float(ctx_accuracy.mean().item()),
+        "mean_margin": float(ctx_accuracy.mean().item()),
+        "ordered_indices_ctx": ordered_indices_ctx.detach().cpu(),
+        "selectivity_ctx": selectivity_ctx.detach().cpu(),
+    }
+
+
+def measure_ctx_latent_accuracy_job(
+    network_name,
+    network,
+    recording_parameters,
+    input_params,
+    latent_specs,
+    num_swaps,
+    num_days,
+    semantic_charge,
+    num_stored_recordings,
+    seed,
+    print_rate,
+    verbose=False,
+):
+    result = measure_ctx_latent_accuracy(
         network=deepcopy(network),
         recording_parameters=recording_parameters,
         input_params=input_params,

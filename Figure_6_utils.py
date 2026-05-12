@@ -49,11 +49,17 @@ class SparseHopfieldNetwork(nn.Module):
         self.num_patterns_stored = int(patterns.shape[0])
 
         weights = torch.zeros_like(self.mtl_sensory_mtl_sensory)
+
         for pattern in patterns:
             pattern_centered = pattern - activity
             weights += torch.outer(pattern_centered, pattern_centered)
-
         self.mtl_sensory_mtl_sensory = weights / norm
+
+        #for pattern in patterns:
+        #    weights += torch.outer(pattern, pattern) 
+        #self.mtl_sensory_mtl_sensory = weights/patterns.shape[1]
+
+        self.mtl_sensory_mtl_sensory.fill_diagonal_(0)
 
     def pattern_complete(
         self,
@@ -84,8 +90,8 @@ class SparseHopfieldNetwork(nn.Module):
             field = F.linear(h - activity, self.mtl_sensory_mtl_sensory)
             h = (field > theta).float()
 
-        final_field = F.linear(h - activity, self.mtl_sensory_mtl_sensory)
-        return self._topk_project_mtl_sensory(final_field)
+        #return self._topk_project_mtl_sensory(h)
+        return h
 
 
 def sample_random_mtl_sensory_patterns(num_patterns, pattern_size, pattern_sparsity):
