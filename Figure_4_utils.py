@@ -34,13 +34,6 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
 
     network = torch.load(initial_network_path, weights_only=False)
 
-    network.max_semantic_charge_replay = 2
-    network.init_recordings(recording_parameters)
-    network.frozen = False
-    network.activity_recordings_rate = 1
-    network.connectivity_recordings_rate = np.inf
-
-
     if mode == 'scrambled':
         '''
         # Generate independent permutations for each row
@@ -53,21 +46,19 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
         '''
         #network.lesioned = {"mtl_semantic"}
         network.sensory_replay_only = True
-        
 
-    network.max_semantic_charge_replay = 2
     network.init_recordings(recording_parameters)
     network.frozen = False
     network.activity_recordings_rate = 1
     network.connectivity_recordings_rate = np.inf
 
-
-    input_params["num_days"] = 1000
+    input_params = deepcopy(input_params)
+    warmup_days = 100
+    higher_order_days = 1000
+    input_params["num_days"] = warmup_days + higher_order_days
     input_params["day_length"] = 80
     input_params["mean_duration"] = 5
     input_params["latent_space"] = LatentSpace(**latent_specs)
-
-
 
     input, input_episodes, input_latents = make_input(**input_params)
 
@@ -78,6 +69,7 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
         for day in range(input_params["num_days"]):
             if day%print_rate == 0:
                 print(day)
+            network.max_semantic_charge_replay = 1 if day < warmup_days else 2
             network(input[day], debug=False)
             if sleep:
                 network.sleep()
@@ -103,6 +95,8 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     network.input_episodes_higher_order = input_episodes.clone()
     network.input_params_higher_order = {
         "num_days": input_params["num_days"],
+        "warmup_days": warmup_days,
+        "higher_order_days": higher_order_days,
         "day_length": input_params["day_length"],
         "mean_duration": input_params["mean_duration"],
         "fixed_duration": input_params["fixed_duration"],

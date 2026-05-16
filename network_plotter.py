@@ -135,13 +135,27 @@ def _resolve_phase_runs(net, wake_sleep: int | str) -> Tuple[str, List[DayRun]]:
 
 def _resolve_recording_index(net, day: int, wake_sleep: int | str, timestep: int) -> Tuple[str, int]:
     phase_name, phase_runs = _resolve_phase_runs(net, wake_sleep=wake_sleep)
-    if day < 0 or day >= len(phase_runs):
-        raise IndexError(
-            f"Requested day={day} for phase '{phase_name}', but only "
-            f"{len(phase_runs)} days are available."
-        )
+    resolved_day = int(day)
+    if resolved_day < 0:
+        raise IndexError(f"Requested day={day} for phase '{phase_name}', but day must be >= 0.")
 
-    run = phase_runs[day]
+    # Support both relative recorded-day indexing (0..num_recorded_days-1) and
+    # absolute network-day indexing. For returned example networks we often only
+    # record a suffix of training, so absolute day labels are more natural.
+    if resolved_day >= len(phase_runs):
+        absolute_day_end = int(getattr(net, "day", len(phase_runs)))
+        absolute_day_start = max(0, absolute_day_end - len(phase_runs))
+        if absolute_day_start <= resolved_day < absolute_day_end:
+            resolved_day = resolved_day - absolute_day_start
+        else:
+            raise IndexError(
+                f"Requested day={day} for phase '{phase_name}', but only "
+                f"{len(phase_runs)} recorded days are available. "
+                f"Valid relative days are [0, {len(phase_runs) - 1}] and "
+                f"valid absolute days are [{absolute_day_start}, {absolute_day_end - 1}]."
+            )
+
+    run = phase_runs[resolved_day]
     if timestep < 0 or timestep >= run.length:
         raise IndexError(
             f"Requested timestep={timestep} for day={day}, phase='{phase_name}', "
@@ -154,6 +168,32 @@ def _resolve_recording_index(net, day: int, wake_sleep: int | str, timestep: int
 def _get_region_activity(net, region: str, recording_index: int) -> torch.Tensor:
     recordings = torch.stack(net.activity_recordings[region], dim=0)
     return recordings[recording_index].detach().cpu().float()
+
+
+def _get_full_ctx_order(net, activity_size: int) -> torch.Tensor | None:
+    parts = []
+    seen = set()
+
+    for attr_name in ["ordered_indices_ctx", "ordered_indices_ctx_episodes"]:
+        if not hasattr(net, attr_name):
+            continue
+        indices = getattr(net, attr_name)
+        if not torch.is_tensor(indices):
+            indices = torch.as_tensor(indices)
+        indices = indices.detach().cpu().long().flatten()
+        filtered = []
+        for idx in indices.tolist():
+            if 0 <= idx < activity_size and idx not in seen:
+                filtered.append(idx)
+                seen.add(idx)
+        if filtered:
+            parts.append(torch.tensor(filtered, dtype=torch.long))
+
+    if not parts:
+        return None
+
+    ordered = torch.cat(parts, dim=0)
+    return ordered
 
 
 def _get_connection_snapshot(
@@ -247,8 +287,23 @@ def _get_order_for_selected_indices(
 
 
 def _get_connection_regions(connection: str) -> Tuple[str, str]:
-    post_region, pre_region = connection.split("_", 1)
-    return post_region, pre_region
+    valid_regions = ["sen", "ctx", "mtl", "mtl_sensory", "mtl_semantic"]
+
+    matches: List[Tuple[str, str]] = []
+    for post_region in valid_regions:
+        prefix = post_region + "_"
+        if not connection.startswith(prefix):
+            continue
+        pre_region = connection[len(prefix):]
+        if pre_region in valid_regions:
+            matches.append((post_region, pre_region))
+
+    if not matches:
+        raise ValueError(f"Could not parse connection name '{connection}' into known regions.")
+
+    # Prefer the longest post-region match so names like mtl_semantic_ctx parse correctly.
+    matches.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return matches[0]
 
 
 def _get_region_indices(
@@ -262,6 +317,18 @@ def _get_region_indices(
     return getattr(net, f"{region}_subregions")[subregion_index].detach().cpu().long()
 
 
+def _make_default_concept_ticks(num_neurons: int):
+    if num_neurons % 10 != 0:
+        return None, None
+    num_concepts = num_neurons // 10
+    if num_concepts == 10:
+        labels = [f"A{i+1}" for i in range(5)] + [f"B{i+1}" for i in range(5)]
+    else:
+        labels = [str(i + 1) for i in range(num_concepts)]
+    positions = [10 * i + 5 for i in range(num_concepts)]
+    return positions, labels
+
+
 def _reshape_strip(activity: torch.Tensor, n_rows: int = 10) -> np.ndarray:
     activity = activity.detach().cpu().float()
     if activity.numel() % n_rows != 0:
@@ -270,6 +337,165 @@ def _reshape_strip(activity: torch.Tensor, n_rows: int = 10) -> np.ndarray:
             f"{n_rows} rows."
         )
     return activity.reshape(n_rows, activity.numel() // n_rows).numpy()
+
+
+def _infer_region_snapshot_rows(
+    region: str,
+    num_neurons: int,
+    *,
+    subregion: int | None = None,
+    current_rows: int,
+) -> int:
+    if num_neurons % current_rows == 0:
+        return current_rows
+
+    candidate_group_counts: List[int] = []
+    if region in {"mtl_sensory", "mtl_semantic"}:
+        candidate_group_counts.extend([10])
+    elif region == "ctx":
+        if subregion == 0:
+            candidate_group_counts.extend([10])
+        elif subregion == 1:
+            candidate_group_counts.extend([25])
+    elif region == "mtl":
+        if subregion in (0, 1):
+            candidate_group_counts.extend([10])
+
+    for num_groups in candidate_group_counts:
+        if num_groups > 0 and num_neurons % num_groups == 0:
+            return num_groups
+
+    for fallback_rows in (10, 25, 20, 15, 5):
+        if num_neurons % fallback_rows == 0:
+            return fallback_rows
+
+    return current_rows
+
+
+def _make_complex_episode_labels() -> List[str]:
+    return [f"A{i+1}B{j+1}" for i in range(5) for j in range(5)]
+
+
+def _infer_region_snapshot_y_ticks_labels(
+    region: str,
+    num_rows: int,
+    *,
+    subregion: int | None = None,
+) -> Tuple[List[int] | None, List[str] | None]:
+    if region in {"mtl_sensory", "mtl_semantic"}:
+        if num_rows == 10:
+            labels = [f"A{i+1}" for i in range(5)] + [f"B{i+1}" for i in range(5)]
+            return list(range(10)), labels
+    elif region == "ctx":
+        if subregion == 0 and num_rows == 10:
+            labels = [f"A{i+1}" for i in range(5)] + [f"B{i+1}" for i in range(5)]
+            return list(range(10)), labels
+        if subregion == 1 and num_rows == 25:
+            return list(range(25)), _make_complex_episode_labels()
+    elif region == "mtl":
+        if subregion in (0, 1) and num_rows == 10:
+            labels = [f"A{i+1}" for i in range(5)] + [f"B{i+1}" for i in range(5)]
+            return list(range(10)), labels
+    return None, None
+
+
+def _get_region_display_name(region: str, subregion: int | None = None) -> str:
+    region_defaults = plotting_parameters.get(region, {})
+    if subregion is not None:
+        subregion_display_names = region_defaults.get("subregion_display_names")
+        if subregion_display_names is not None and 0 <= int(subregion) < len(subregion_display_names):
+            return str(subregion_display_names[int(subregion)])
+    return region.replace("_", "-").upper()
+
+
+def _get_full_region_order(net, region: str) -> torch.Tensor | None:
+    num_subregions = int(getattr(net, f"{region}_num_subregions", 1))
+    if num_subregions <= 1:
+        return None
+
+    parts: List[torch.Tensor] = []
+    for subregion_index in range(num_subregions):
+        subregion_indices = _get_region_indices(net, region, subregion_index=subregion_index)
+        subregion_order = _get_order_for_selected_indices(
+            net,
+            region,
+            subregion_indices,
+            subregion_index=subregion_index,
+        )
+        if subregion_order is None:
+            ordered_indices = subregion_indices
+        else:
+            ordered_indices = subregion_indices[subregion_order]
+        parts.append(ordered_indices.detach().cpu().long())
+
+    if not parts:
+        return None
+    return torch.cat(parts, dim=0)
+
+
+def _get_weight_tick_template(region: str, subregion: int | None = None) -> Tuple[List[float] | None, List[str] | None]:
+    if region in {"mtl_sensory", "mtl_semantic"}:
+        defaults = plotting_parameters.get(region, {})
+        return defaults.get("weight_ticks"), defaults.get("weight_ticklabels")
+
+    if region == "mtl":
+        if subregion == 0:
+            defaults = plotting_parameters.get("mtl_sensory", {})
+            return defaults.get("weight_ticks"), defaults.get("weight_ticklabels")
+        if subregion == 1:
+            defaults = plotting_parameters.get("mtl_semantic", {})
+            return defaults.get("weight_ticks"), defaults.get("weight_ticklabels")
+
+    if subregion is not None:
+        defaults = plotting_parameters.get(f"{region}_subregion_{subregion}", {})
+        return defaults.get("weight_ticks"), defaults.get("weight_ticklabels")
+
+    return None, None
+
+
+def _build_region_weight_ticks_labels(
+    net,
+    region: str,
+    *,
+    subregion: int | None,
+    displayed_size: int,
+) -> Tuple[List[float] | None, List[str] | None]:
+    if subregion is not None:
+        ticks, labels = _get_weight_tick_template(region, subregion)
+        return ticks, labels
+
+    num_subregions = int(getattr(net, f"{region}_num_subregions", 1))
+    if num_subregions <= 1:
+        ticks, labels = _get_weight_tick_template(region, None)
+        if ticks is not None and labels is not None:
+            return ticks, labels
+        return _make_default_concept_ticks(displayed_size)
+
+    full_order = _get_full_region_order(net, region)
+    expected_size = int(full_order.numel()) if full_order is not None else int(getattr(net, f"{region}_size"))
+    if displayed_size != expected_size:
+        return None, None
+
+    ticks_all: List[float] = []
+    labels_all: List[str] = []
+    offset = 0
+    for subregion_index in range(num_subregions):
+        subregion_indices = _get_region_indices(net, region, subregion_index=subregion_index)
+        subregion_order = _get_order_for_selected_indices(
+            net,
+            region,
+            subregion_indices,
+            subregion_index=subregion_index,
+        )
+        subregion_size = int(subregion_order.numel()) if subregion_order is not None else int(subregion_indices.numel())
+        sub_ticks, sub_labels = _get_weight_tick_template(region, subregion_index)
+        if sub_ticks is None or sub_labels is None:
+            return None, None
+        ticks_all.extend([offset + float(tick) for tick in sub_ticks])
+        labels_all.extend(list(sub_labels))
+        offset += subregion_size
+
+    return ticks_all, labels_all
 
 
 def _reshape_concept_columns(activity: torch.Tensor, neurons_per_concept: int = 10) -> np.ndarray:
@@ -447,6 +673,7 @@ def plot_region_snapshot(
     wake_sleep: int | str,
     timestep: int,
     *,
+    subregion: int | None = None,
     cmap=blue_yellow,
     figsize: Tuple[float, float] = (2, 2),
     reshape_rows: int = 10,
@@ -469,7 +696,8 @@ def plot_region_snapshot(
     grid_linewidth: float = 0.35,
     grid_alpha: float = 0.8,
 ):
-    region_defaults = plotting_parameters.get(region, {})
+    region_defaults_key = f"{region}_subregion_{subregion}" if subregion is not None else region
+    region_defaults = plotting_parameters.get(region_defaults_key, plotting_parameters.get(region, {}))
 
     if figsize == (2, 2) and "figsize" in region_defaults:
         figsize = tuple(region_defaults["figsize"])
@@ -508,17 +736,57 @@ def plot_region_snapshot(
     )
 
     activity = _get_region_activity(net, region, recording_index)
+    if subregion is not None:
+        region_indices = _get_region_indices(net, region, subregion_index=subregion)
+        activity = activity[region_indices]
 
     if auto_order:
-        if region == "ctx" and hasattr(net, "ordered_indices_ctx"):
-            activity = activity[net.ordered_indices_ctx.detach().cpu()]
-        elif region == "mtl_semantic" and hasattr(net, "ordered_indices_mtl_semantic"):
-            activity = activity[net.ordered_indices_mtl_semantic.detach().cpu()]
+        if subregion is not None:
+            subregion_order = _get_order_for_selected_indices(
+                net,
+                region,
+                region_indices,
+                subregion_index=subregion,
+            )
+            if subregion_order is not None:
+                activity = activity[subregion_order]
+        elif region == "ctx":
+            full_ctx_order = _get_full_ctx_order(net, int(activity.numel()))
+            if full_ctx_order is not None:
+                activity = activity[full_ctx_order]
+        else:
+            full_region_indices = _get_region_indices(net, region, subregion_index=None)
+            region_order = _get_order_for_selected_indices(
+                net,
+                region,
+                full_region_indices,
+                subregion_index=None,
+            )
+            if region_order is not None:
+                activity = activity[region_order]
 
     if order is not None:
         if torch.is_tensor(order):
             order = order.detach().cpu()
         activity = activity[order]
+
+    reshape_rows = _infer_region_snapshot_rows(
+        region,
+        int(activity.numel()),
+        subregion=subregion,
+        current_rows=int(reshape_rows),
+    )
+
+    inferred_yticks, inferred_yticklabels = _infer_region_snapshot_y_ticks_labels(
+        region,
+        int(reshape_rows),
+        subregion=subregion,
+    )
+    if inferred_yticks is not None:
+        if yticks is None or len(yticks) != int(reshape_rows):
+            yticks = inferred_yticks
+        if yticklabels is None or len(yticklabels) != int(reshape_rows):
+            yticklabels = inferred_yticklabels
 
     panel = _reshape_strip(activity, n_rows=reshape_rows)
 
@@ -618,6 +886,8 @@ def plot_weight_snapshot(
     apply_tight_layout: bool = False,
     subplots_adjust: Dict[str, float] | None = None,
 ):
+    ylabel_is_default = ylabel is None
+    xlabel_is_default = xlabel is None
     defaults = plotting_parameters.get(connection, {})
 
     figsize = tuple(defaults.get("figsize", (3, 3))) if figsize is None else figsize
@@ -655,35 +925,75 @@ def plot_weight_snapshot(
 
     post_region, pre_region = _get_connection_regions(connection)
 
+    if ylabel_is_default:
+        ylabel = f"Post Neuron\n({_get_region_display_name(post_region, subregion_post)})"
+    if xlabel_is_default:
+        if pre_region == "mtl" and subregion_pre is None:
+            xlabel = "Pre Neuron\n(MTL-sensory)       (MTL-semantic)"
+        elif pre_region == "ctx" and subregion_pre is None:
+            xlabel = "Pre Neuron\n(CTX)       (CTX episodes)"
+        else:
+            xlabel = f"Pre Neuron\n({_get_region_display_name(pre_region, subregion_pre)})"
+
     post_indices = _get_region_indices(net, post_region, subregion_index=subregion_post)
     pre_indices = _get_region_indices(net, pre_region, subregion_index=subregion_pre)
+
+    if subregion_post is None and row_order_attr is None:
+        full_post_order = _get_full_region_order(net, post_region)
+        if full_post_order is not None:
+            post_indices = full_post_order
+    else:
+        row_order = _get_order_for_selected_indices(
+            net,
+            post_region,
+            post_indices,
+            subregion_index=subregion_post,
+            explicit_order_attr=row_order_attr,
+        )
+        if row_order is not None:
+            post_indices = post_indices[row_order]
+
+    if subregion_pre is None and col_order_attr is None:
+        full_pre_order = _get_full_region_order(net, pre_region)
+        if full_pre_order is not None:
+            pre_indices = full_pre_order
+    else:
+        col_order = _get_order_for_selected_indices(
+            net,
+            pre_region,
+            pre_indices,
+            subregion_index=subregion_pre,
+            explicit_order_attr=col_order_attr,
+        )
+        if col_order is not None:
+            pre_indices = pre_indices[col_order]
+
     weights = weights[post_indices][:, pre_indices]
-
-    row_order = _get_order_for_selected_indices(
-        net,
-        post_region,
-        post_indices,
-        subregion_index=subregion_post,
-        explicit_order_attr=row_order_attr,
-    )
-    if row_order is not None:
-        weights = weights[row_order]
-
-    col_order = _get_order_for_selected_indices(
-        net,
-        pre_region,
-        pre_indices,
-        subregion_index=subregion_pre,
-        explicit_order_attr=col_order_attr,
-    )
-    if col_order is not None:
-        weights = weights[:, col_order]
     if row_slice is not None:
         weights = weights[row_slice]
     if col_slice is not None:
         weights = weights[:, col_slice]
 
     panel = weights.detach().cpu().numpy()
+
+    if xticks is None and xticklabels is None:
+        xticks, xticklabels = _build_region_weight_ticks_labels(
+            net,
+            pre_region,
+            subregion=subregion_pre,
+            displayed_size=panel.shape[1],
+        )
+        if xticks is None and xticklabels is None:
+            xticks, xticklabels = _make_default_concept_ticks(panel.shape[1])
+    if yticks is None and yticklabels is None:
+        yticks, yticklabels = _build_region_weight_ticks_labels(
+            net,
+            post_region,
+            subregion=subregion_post,
+            displayed_size=panel.shape[0],
+        )
+        if yticks is None and yticklabels is None:
+            yticks, yticklabels = _make_default_concept_ticks(panel.shape[0])
 
     fig = plt.figure(figsize=figsize)
     ax = plt.gca()

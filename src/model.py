@@ -13,7 +13,7 @@ class SSCNetwork(nn.Module):
       self.init_network(net_params)
       self.init_recordings(rec_params)
 
-    def forward(self, input, debug=False):
+    def forward(self, input, debug=False, true_latent=None):
         #this resests the network quick connections at the beginning of each day
         if self.reset_dayly:
             self.mtl_mtl = torch.zeros((self.mtl_size, self.mtl_size))
@@ -31,9 +31,13 @@ class SSCNetwork(nn.Module):
             self.mtl_sensory_hat = F.linear(self.sen, self.mtl_sensory_sen)
             self.mtl_sensory, _ = self.activation(self.mtl_sensory_hat, 'mtl_sensory')
 
-            #mtl_semantic is initialized at random
-            self.mtl_semantic_hat = torch.randn(self.mtl_semantic_size)
-            self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
+            if true_latent is not None:
+                self.mtl_semantic = self.latent_to_mtl_semantic(true_latent[timestep]).clone()
+                self.mtl_semantic_hat = self.mtl_semantic.clone()
+            else:
+                #mtl_semantic is initialized at random
+                self.mtl_semantic_hat = torch.randn(self.mtl_semantic_size)
+                self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
 
             #set full mtl
             self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
@@ -44,7 +48,7 @@ class SSCNetwork(nn.Module):
             self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
 
             #if CTX is developed (after phase A), ctx to mtl_semantic
-            if self.day >= self.duration_phase_A and "mtl_semantic" not in self.lesioned:
+            if true_latent is None and self.day >= self.duration_phase_A and "mtl_semantic" not in self.lesioned:
                self.mtl_semantic_hat = F.linear(self.ctx, self.mtl_semantic_ctx) + self.mtl_semantic_b*self.mtl_semantic_IM
                self.mtl_semantic, _ = self.activation(self.mtl_semantic_hat, 'mtl_semantic')
                self.mtl[self.mtl_sensory_size:] = self.mtl_semantic
@@ -74,6 +78,45 @@ class SSCNetwork(nn.Module):
             self.time_index += 1
             self.awake_indices.append(self.time_index)
         self.day += 1
+
+
+    def latent_to_mtl_semantic(self, latent):
+        latent_tensor = torch.as_tensor(latent).long().flatten()
+        if latent_tensor.numel() == 0:
+            raise ValueError("latent_to_mtl_semantic requires at least one latent index.")
+
+        assembly_size = int(
+            self.mtl_semantic_size_subregions[0] * self.mtl_semantic_sparsity[0] / self.max_semantic_charge_input
+        )
+        if assembly_size <= 0:
+            raise ValueError(
+                "MTL-semantic assembly size must be positive. "
+                f"Got size={int(self.mtl_semantic_size_subregions[0])}, "
+                f"sparsity={float(self.mtl_semantic_sparsity[0])}, "
+                f"max_semantic_charge_input={float(self.max_semantic_charge_input)}."
+            )
+
+        total_concepts = int(self.mtl_semantic_size / assembly_size)
+        if total_concepts % latent_tensor.numel() != 0:
+            raise ValueError(
+                "Cannot evenly map latent dimensions into MTL-semantic assemblies. "
+                f"Got total_concepts={total_concepts} and num_latent_dims={latent_tensor.numel()}."
+            )
+        concepts_per_dimension = total_concepts // latent_tensor.numel()
+
+        semantic_state = torch.zeros(self.mtl_semantic_size, dtype=self.mtl_semantic.dtype)
+        for dim_index, concept_index in enumerate(latent_tensor.tolist()):
+            if concept_index < 0 or concept_index >= concepts_per_dimension:
+                raise ValueError(
+                    f"Latent index {concept_index} out of range for dimension {dim_index}. "
+                    f"Expected 0 <= index < {concepts_per_dimension}."
+                )
+            global_concept_index = dim_index * concepts_per_dimension + concept_index
+            start = global_concept_index * assembly_size
+            end = start + assembly_size
+            semantic_state[start:end] = 1
+
+        return semantic_state
     
 
     def sleep(self):
