@@ -11,6 +11,65 @@ import random
 from collections import OrderedDict
 
 
+def get_signal_to_noise_ratio(num_swaps, network, region: str = "mtl", return_per_subregion: bool = False):
+    """
+    Compute an effective signal-to-noise ratio associated with ``num_swaps``.
+
+    The quantity follows the overlap-based heuristic used in earlier analyses:
+    signal = expected overlap with the original pattern minus expected overlap
+    with a random sparse pattern, and noise = total number of flipped bits.
+
+    For ``num_swaps == 0`` the function returns ``inf`` by convention.
+
+    Args:
+        num_swaps: scalar corruption level used by ``get_sample_from_num_swaps``.
+        network: network object providing ``<region>_num_subregions``,
+            ``<region>_size_subregions``, ``<region>_sparsity``, and
+            ``<region>_size``.
+        region: region name whose subregions define the effective SNR.
+            Defaults to ``"mtl"``.
+        return_per_subregion: if True, also return the per-subregion SNR values.
+
+    Returns:
+        mean_snr, or ``(mean_snr, per_subregion_snr)`` if
+        ``return_per_subregion=True``.
+    """
+    num_swaps_value = float(num_swaps)
+    if num_swaps_value == 0:
+        mean_snr = float("inf")
+        if return_per_subregion:
+            num_subregions = int(getattr(network, f"{region}_num_subregions"))
+            return mean_snr, [float("inf")] * num_subregions
+        return mean_snr
+
+    num_subregions = int(getattr(network, f"{region}_num_subregions"))
+    size_subregions = torch.as_tensor(getattr(network, f"{region}_size_subregions")).detach().cpu().float()
+    sparsity = torch.as_tensor(getattr(network, f"{region}_sparsity")).detach().cpu().float()
+    total_size = float(
+        getattr(
+            network,
+            f"{region}_size",
+            torch.as_tensor(size_subregions).detach().cpu().float().sum().item(),
+        )
+    )
+
+    snr_list = []
+    for subregion_index in range(num_subregions):
+        N = float(size_subregions[subregion_index].item())
+        K = float((size_subregions[subregion_index] * sparsity[subregion_index]).item())
+        num_swaps_region = float(torch.round(torch.tensor(num_swaps_value * N / total_size)).item())
+
+        signal = (K - num_swaps_region) - (K ** 2 / N)
+        noise = 2.0 * num_swaps_region
+        snr = float((signal / noise) ** 2)
+        snr_list.append(snr)
+
+    mean_snr = float(np.mean(snr_list))
+    if return_per_subregion:
+        return mean_snr, snr_list
+    return mean_snr
+
+
 def get_sample_from_num_swaps(x_0, num_swaps, regions=None):
     if regions == None:
       x = x_0.clone().detach()

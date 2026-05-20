@@ -18,6 +18,7 @@ from src.utils.general import (
     get_ordered_accuracy,
     get_ordered_indices,
     get_prototypes,
+    get_signal_to_noise_ratio,
     make_input,
     test_network,
 )
@@ -135,6 +136,52 @@ def _sample_replay_recordings(replayed_mtl_sensory, num_stored_recordings):
     stored_indices = torch.randperm(num_available)[:num_to_store]
     stored_recordings = replayed_mtl_sensory[stored_indices].detach().cpu().clone()
     return stored_recordings, stored_indices.detach().cpu().clone()
+
+
+def _get_replay_pattern_snr(
+    replayed_patterns,
+    prototypes,
+    inferred_indices,
+    network,
+    region="mtl_sensory",
+):
+    replayed_patterns = torch.as_tensor(replayed_patterns).detach().cpu().float()
+    prototypes = torch.as_tensor(prototypes).detach().cpu().float()
+    inferred_indices = torch.as_tensor(inferred_indices).detach().cpu().long()
+
+    if replayed_patterns.numel() == 0:
+        return {
+            "closest_prototype_hamming": torch.empty(0, dtype=torch.float32),
+            "closest_prototype_num_swaps": torch.empty(0, dtype=torch.long),
+            "closest_prototype_snr": torch.empty(0, dtype=torch.float32),
+            "fraction_exact_prototype_replays": float("nan"),
+            "mean_closest_prototype_snr": float("nan"),
+        }
+
+    closest_prototypes = prototypes[inferred_indices]
+    hamming = (replayed_patterns != closest_prototypes).sum(dim=1).to(torch.float32)
+    estimated_num_swaps = torch.div(hamming.to(torch.long), 2, rounding_mode="floor")
+    snr_values = torch.tensor(
+        [
+            float(get_signal_to_noise_ratio(int(swaps.item()), network, region=region))
+            for swaps in estimated_num_swaps
+        ],
+        dtype=torch.float32,
+    )
+    exact_mask = estimated_num_swaps == 0
+    finite_mask = torch.isfinite(snr_values)
+    if bool(finite_mask.any().item()):
+        mean_snr = float(snr_values[finite_mask].mean().item())
+    else:
+        mean_snr = float("nan")
+
+    return {
+        "closest_prototype_hamming": hamming,
+        "closest_prototype_num_swaps": estimated_num_swaps,
+        "closest_prototype_snr": snr_values,
+        "fraction_exact_prototype_replays": float(exact_mask.to(torch.float32).mean().item()),
+        "mean_closest_prototype_snr": mean_snr,
+    }
 
 
 def _get_sleep_a_replays_for_semantic_charge(
@@ -480,6 +527,7 @@ def aggregate_codex_figure_5_results(job_results, noise_levels=None, seeds=None)
     for network_name in network_names:
         aggregate["per_seed"][network_name] = {}
         seed_curves = []
+        replay_snr_seed_curves = []
         for seed in seeds:
             per_seed_jobs = [
                 job
@@ -537,6 +585,7 @@ def aggregate_codex_figure_5_generalization_results(job_results, noise_levels=No
     for network_name in network_names:
         aggregate["per_seed"][network_name] = {}
         seed_curves = []
+        replay_snr_seed_curves = []
         for seed in seeds:
             per_seed_jobs = [
                 job
@@ -554,12 +603,22 @@ def aggregate_codex_figure_5_generalization_results(job_results, noise_levels=No
             seed_curves.append(
                 np.array([job["mean_margin"] for job in per_seed_jobs], dtype=float)
             )
+            replay_snr_seed_curves.append(
+                np.array(
+                    [job.get("mean_closest_prototype_snr", np.nan) for job in per_seed_jobs],
+                    dtype=float,
+                )
+            )
 
         seed_curves = np.stack(seed_curves, axis=0)
+        replay_snr_seed_curves = np.stack(replay_snr_seed_curves, axis=0)
         aggregate["summary"][network_name] = {
             "seed_curves": seed_curves,
             "mean_curve": seed_curves.mean(axis=0),
             "std_curve": seed_curves.std(axis=0),
+            "replay_snr_seed_curves": replay_snr_seed_curves,
+            "replay_snr_mean_curve": np.nanmean(replay_snr_seed_curves, axis=0),
+            "replay_snr_std_curve": np.nanstd(replay_snr_seed_curves, axis=0),
         }
 
     return aggregate
@@ -679,6 +738,23 @@ def measure_sleep_a_awake_generalization(
             prototypes,
             return_indices=True,
         )
+
+    if semantic_charge == 2:
+        replay_pattern_snr = _get_replay_pattern_snr(
+            replayed_mtl_sensory,
+            prototypes,
+            inferred_concepts,
+            network,
+            region="mtl_sensory",
+        )
+    else:
+        replay_pattern_snr = {
+            "closest_prototype_hamming": torch.empty(0, dtype=torch.float32),
+            "closest_prototype_num_swaps": torch.empty(0, dtype=torch.long),
+            "closest_prototype_snr": torch.empty(0, dtype=torch.float32),
+            "fraction_exact_prototype_replays": float("nan"),
+            "mean_closest_prototype_snr": float("nan"),
+        }
     if verbose:
         print(
             f"[pid={os.getpid()}] generalization"
@@ -787,6 +863,11 @@ def measure_sleep_a_awake_generalization(
         "awake_concepts": torch.tensor(inferred_concepts_list, dtype=torch.long),
         "awake_target_indices": torch.tensor(awake_target_indices, dtype=torch.long),
         "prototype_overlap": concept_overlap.detach().cpu(),
+        "closest_prototype_hamming": replay_pattern_snr["closest_prototype_hamming"],
+        "closest_prototype_num_swaps": replay_pattern_snr["closest_prototype_num_swaps"],
+        "closest_prototype_snr": replay_pattern_snr["closest_prototype_snr"],
+        "fraction_exact_prototype_replays": replay_pattern_snr["fraction_exact_prototype_replays"],
+        "mean_closest_prototype_snr": replay_pattern_snr["mean_closest_prototype_snr"],
         "sim_present": torch.tensor(sim_present, dtype=torch.float32),
         "sim_absent": torch.tensor(sim_absent, dtype=torch.float32),
         "margins": margins_tensor,
@@ -1228,6 +1309,97 @@ def _get_ctx_episode_accuracy_from_frozen_eval_net(
         "ordered_indices_ctx_episodes": ordered_indices_ctx_episodes.detach().cpu(),
         "selectivity_ctx_episodes": episode_results["selectivity"].detach().cpu(),
     }
+
+
+def attach_ctx_replay_readout_orderings(
+    network,
+    input_params,
+    latent_specs,
+    num_days=100,
+    num_swaps=None,
+    include_simple=True,
+    include_complex=False,
+):
+    if (not include_simple) and (not include_complex):
+        return network
+
+    eval_recording_parameters = {
+        "regions": ["ctx"],
+        "rate_activity": 1,
+        "connections": [],
+        "rate_connectivity": np.inf,
+    }
+    eval_net = deepcopy(network)
+    eval_net.init_recordings(eval_recording_parameters)
+    eval_net.frozen = True
+    eval_net.activity_recordings_rate = 1
+    eval_net.connectivity_recordings_rate = np.inf
+
+    eval_input_params = _make_input_params(
+        input_params,
+        latent_specs,
+        num_days=num_days,
+        num_swaps=input_params["num_swaps"] if num_swaps is None else num_swaps,
+    )
+    eval_input, eval_input_episodes, eval_input_latents = make_input(**eval_input_params)
+
+    with torch.no_grad():
+        for day in range(eval_input_params["num_days"]):
+            eval_net(eval_input[day], debug=False)
+
+    if include_simple:
+        simple_results = _get_ctx_simple_accuracy_from_frozen_eval_net(
+            eval_net,
+            eval_input_latents,
+            latent_specs,
+        )
+        for attr_name in [
+            "ordered_indices_ctx",
+            "selectivity_ctx",
+            "ordered_indices_mtl_sensory",
+            "selectivity_mtl_sensory",
+            "ordered_indices_mtl_semantic",
+            "selectivity_mtl_semantic",
+        ]:
+            if attr_name in simple_results:
+                setattr(network, attr_name, simple_results[attr_name].detach().cpu())
+
+    if include_complex:
+        complex_results = _get_ctx_episode_accuracy_from_frozen_eval_net(
+            eval_net,
+            eval_input_episodes,
+            latent_specs,
+        )
+        for attr_name in [
+            "ordered_indices_ctx_episodes",
+            "selectivity_ctx_episodes",
+        ]:
+            if attr_name in complex_results:
+                setattr(network, attr_name, complex_results[attr_name].detach().cpu())
+
+    return network
+
+
+def attach_ctx_replay_readout_orderings_to_dict(
+    trained_networks,
+    input_params,
+    latent_specs,
+    num_days=100,
+    num_swaps=None,
+    include_simple=True,
+    include_complex=False,
+):
+    for network_name, network in trained_networks.items():
+        trained_networks[network_name] = attach_ctx_replay_readout_orderings(
+            network,
+            input_params=input_params,
+            latent_specs=latent_specs,
+            num_days=num_days,
+            num_swaps=num_swaps,
+            include_simple=include_simple,
+            include_complex=include_complex,
+        )
+    return trained_networks
 
 
 def generalization_simple_complex(
@@ -2086,6 +2258,10 @@ def plot_codex_figure_5(
     labels=None,
     title=None,
     ylabel="Mean Max Overlap",
+    xlabel=None,
+    x_values=None,
+    xticklabels=None,
+    xscale=None,
     scatter_alpha=0.35,
     line_width=2.5,
 ):
@@ -2102,7 +2278,23 @@ def plot_codex_figure_5(
             "semantics_present": "#00AEEF",
         }
 
-    x = results["noise_levels"]
+    if x_values is None:
+        if "snr_levels" in results:
+            x = np.asarray(results["snr_levels"], dtype=float)
+            if xlabel is None:
+                xlabel = "SNR"
+            if xscale is None:
+                xscale = "log"
+            if xticklabels is None:
+                xticklabels = [f"{value:.2f}" for value in x]
+        else:
+            x = np.asarray(results["noise_levels"])
+    else:
+        x = np.asarray(x_values)
+
+    if xlabel is None:
+        xlabel = "num_swaps"
+
     if labels is None:
         labels = {
             "semantics_absent": "semantics absent",
@@ -2135,12 +2327,16 @@ def plot_codex_figure_5(
             alpha=0.15,
         )
 
-    ax.set_xlabel("num_swaps")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
+    if xticklabels is not None:
+        ax.set_xticklabels(xticklabels)
+    if xscale is not None:
+        ax.set_xscale(xscale)
     ax.set_ylim(0, 1.02)
     if title is not None:
         ax.set_title(title)
-    ax.legend(frameon=False)
+    ax.legend(frameon=False, fontsize=16)
 
     return ax
