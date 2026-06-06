@@ -11,7 +11,13 @@ import random
 from collections import OrderedDict
 
 
-def get_signal_to_noise_ratio(num_swaps, network, region: str = "mtl", return_per_subregion: bool = False):
+def get_signal_to_noise_ratio(
+    num_swaps,
+    network,
+    region: str = "mtl",
+    return_per_subregion: bool = False,
+    sleep: bool = False,
+):
     """
     Compute an effective signal-to-noise ratio associated with ``num_swaps``.
 
@@ -29,22 +35,19 @@ def get_signal_to_noise_ratio(num_swaps, network, region: str = "mtl", return_pe
         region: region name whose subregions define the effective SNR.
             Defaults to ``"mtl"``.
         return_per_subregion: if True, also return the per-subregion SNR values.
+        sleep: if True, use ``<region>_sparsity_sleep`` instead of
+            ``<region>_sparsity``.
 
     Returns:
-        mean_snr, or ``(mean_snr, per_subregion_snr)`` if
-        ``return_per_subregion=True``.
+        For scalar ``num_swaps``, returns ``mean_snr``, or
+        ``(mean_snr, per_subregion_snr)`` if ``return_per_subregion=True``.
+        For explicit per-subregion ``num_swaps``, returns the list of
+        per-subregion SNRs directly.
     """
-    num_swaps_value = float(num_swaps)
-    if num_swaps_value == 0:
-        mean_snr = float("inf")
-        if return_per_subregion:
-            num_subregions = int(getattr(network, f"{region}_num_subregions"))
-            return mean_snr, [float("inf")] * num_subregions
-        return mean_snr
-
     num_subregions = int(getattr(network, f"{region}_num_subregions"))
     size_subregions = torch.as_tensor(getattr(network, f"{region}_size_subregions")).detach().cpu().float()
-    sparsity = torch.as_tensor(getattr(network, f"{region}_sparsity")).detach().cpu().float()
+    sparsity_attr = f"{region}_sparsity_sleep" if sleep else f"{region}_sparsity"
+    sparsity = torch.as_tensor(getattr(network, sparsity_attr)).detach().cpu().float()
     total_size = float(
         getattr(
             network,
@@ -53,16 +56,44 @@ def get_signal_to_noise_ratio(num_swaps, network, region: str = "mtl", return_pe
         )
     )
 
+    if isinstance(num_swaps, (list, tuple, np.ndarray, torch.Tensor)):
+        num_swaps_per_subregion = [float(v) for v in list(num_swaps)]
+        if len(num_swaps_per_subregion) != num_subregions:
+            raise ValueError(
+                f"Expected one swap count per {region} subregion "
+                f"({num_subregions}), got {len(num_swaps_per_subregion)}."
+            )
+        explicit_per_subregion = True
+    else:
+        num_swaps_value = float(num_swaps)
+        if num_swaps_value == 0:
+            mean_snr = float("inf")
+            if return_per_subregion:
+                return mean_snr, [float("inf")] * num_subregions
+            return mean_snr
+        num_swaps_per_subregion = [
+            float(torch.round(torch.tensor(num_swaps_value * N / total_size)).item())
+            for N in size_subregions
+        ]
+        explicit_per_subregion = False
+
     snr_list = []
     for subregion_index in range(num_subregions):
         N = float(size_subregions[subregion_index].item())
         K = float((size_subregions[subregion_index] * sparsity[subregion_index]).item())
-        num_swaps_region = float(torch.round(torch.tensor(num_swaps_value * N / total_size)).item())
+        num_swaps_region = float(num_swaps_per_subregion[subregion_index])
+
+        if num_swaps_region == 0:
+            snr_list.append(float("inf"))
+            continue
 
         signal = (K - num_swaps_region) - (K ** 2 / N)
         noise = 2.0 * num_swaps_region
         snr = float((signal / noise) ** 2)
         snr_list.append(snr)
+
+    if explicit_per_subregion:
+        return snr_list
 
     mean_snr = float(np.mean(snr_list))
     if return_per_subregion:
@@ -88,20 +119,27 @@ def get_sample_from_num_swaps(x_0, num_swaps, regions=None):
       x = x_0.clone().detach()
       total_size = sum([len(region) for region in regions])  # Total size of all regions
 
-      for region in regions:
-          # Get the size of the region
-          region_size = len(region)
+      if isinstance(num_swaps, (list, tuple, np.ndarray, torch.Tensor)):
+          num_swaps_per_region = [int(v) for v in list(num_swaps)]
+          if len(num_swaps_per_region) != len(regions):
+              raise ValueError(
+                  f"Expected one swap count per region ({len(regions)}), got {len(num_swaps_per_region)}."
+              )
+      else:
+          num_swaps_per_region = [
+              round(float(num_swaps) * len(region) / total_size)
+              for region in regions
+          ]
 
-          # Determine the number of swaps for this region
-          num_swaps_region = round(num_swaps * region_size / total_size)
-
+      for region, num_swaps_region in zip(regions, num_swaps_per_region):
           # Get on and off indices for this region
           on_index = region[x_0[region] == 1]
           off_index = region[x_0[region] == 0]
 
           # Choose at random num_swaps_region indices
-          flip_off = on_index[torch.randperm(len(on_index))[:num_swaps_region]]
-          flip_on = off_index[torch.randperm(len(off_index))[:num_swaps_region]]
+          max_region_swaps = min(int(num_swaps_region), len(on_index), len(off_index))
+          flip_off = on_index[torch.randperm(len(on_index))[:max_region_swaps]]
+          flip_on = off_index[torch.randperm(len(off_index))[:max_region_swaps]]
 
           # Flip on to off and off to on within this region
           x[flip_off] = 0

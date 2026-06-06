@@ -169,17 +169,17 @@ def _get_replay_pattern_snr(
         dtype=torch.float32,
     )
     exact_mask = estimated_num_swaps == 0
-    finite_mask = torch.isfinite(snr_values)
-    if bool(finite_mask.any().item()):
-        mean_snr = float(snr_values[finite_mask].mean().item())
-    else:
-        mean_snr = float("nan")
+    mean_num_swaps = float(estimated_num_swaps.to(torch.float32).mean().item())
+    mean_num_swaps_floor = int(torch.floor(torch.tensor(mean_num_swaps)).item())
+    mean_snr = float(get_signal_to_noise_ratio(mean_num_swaps_floor, network, region=region))
 
     return {
         "closest_prototype_hamming": hamming,
         "closest_prototype_num_swaps": estimated_num_swaps,
         "closest_prototype_snr": snr_values,
         "fraction_exact_prototype_replays": float(exact_mask.to(torch.float32).mean().item()),
+        "mean_closest_prototype_num_swaps": mean_num_swaps,
+        "mean_closest_prototype_num_swaps_floor": mean_num_swaps_floor,
         "mean_closest_prototype_snr": mean_snr,
     }
 
