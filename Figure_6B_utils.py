@@ -90,9 +90,8 @@ class SparseHopfieldNetwork(nn.Module):
             field = F.linear(h - activity, self.mtl_sensory_mtl_sensory)
             h = (field > theta).float()
 
-        #return self._topk_project_mtl_sensory(h)
-        return h
-
+        return self._topk_project_mtl_sensory(h + torch.rand_like(h) * 1e-6)  # Add small noise to break ties
+        #return h
 
 def sample_random_mtl_sensory_patterns(num_patterns, pattern_size, pattern_sparsity):
     num_active = int(pattern_size * float(pattern_sparsity))

@@ -135,6 +135,11 @@ class SSCNetwork(nn.Module):
         if self.day <= self.duration_phase_B:
           mtl_sensory_random = torch.randn(self.mtl_sensory_size)
           self.mtl_sensory = self.pattern_complete('mtl_sensory', h_0=mtl_sensory_random, sleep=True)
+          # Before semantic replay is available, keep the standalone semantic
+          # state aligned with the zeroed semantic half of full MTL so recorded
+          # mtl_semantic snapshots do not leak the last awake pattern.
+          self.mtl_semantic_hat = torch.zeros_like(self.mtl_semantic_hat)
+          self.mtl_semantic = torch.zeros_like(self.mtl_semantic)
           self.mtl[:self.mtl_sensory_size] = self.mtl_sensory
           self.mtl[self.mtl_sensory_size:] = 0
           self.ctx_hat = F.linear(self.mtl, self.ctx_mtl) + self.ctx_b*self.ctx_IM
