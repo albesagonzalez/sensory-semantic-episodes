@@ -1427,6 +1427,7 @@ def generalization_simple_complex(
             flush=True,
         )
 
+    # A. Set the network mode and noise regime.
     posttrain_num_swaps = int(num_swaps)
     if pretrain_num_swaps is None:
         pretrain_num_swaps = posttrain_num_swaps
@@ -1451,6 +1452,7 @@ def generalization_simple_complex(
     pretrain_days = min(int(simple_train_days), int(phase_B))
     posttrain_simple_days = max(0, int(simple_train_days) - pretrain_days)
 
+    # B. Train on simple concepts up to the phase-B boundary.
     if pretrain_days > 0:
         train_input_params_pre = _make_input_params(
             input_params,
@@ -1485,6 +1487,7 @@ def generalization_simple_complex(
                 flush=True,
             )
 
+    # C. Continue simple-concept training after phase B.
     if posttrain_simple_days > 0:
         train_input_params_post = _make_input_params(
             input_params,
@@ -1519,6 +1522,7 @@ def generalization_simple_complex(
                 flush=True,
             )
 
+    # D. Freeze and evaluate simple-concept readout in CTX.
     simple_eval_recording_parameters = {
         "regions": ["ctx", "mtl_sensory", "mtl_semantic"],
         "rate_activity": 1,
@@ -1565,6 +1569,7 @@ def generalization_simple_complex(
         latent_specs,
     )
 
+    # E. Continue training with charge-2 replay to form complex concepts.
     complex_train_net = network if return_network else deepcopy(network)
     complex_train_net.frozen = False
     complex_train_net.max_semantic_charge_replay = 2
@@ -1599,8 +1604,9 @@ def generalization_simple_complex(
             f"mode={network_mode} seed={seed} num_swaps={num_swaps} "
             "checkpoint=complex_train_done",
             flush=True,
-        )
+            )
 
+    # F. Freeze and evaluate complex episode readout in CTX.
     complex_eval_recording_parameters = {
         "regions": ["ctx"],
         "rate_activity": 1,
@@ -1666,6 +1672,7 @@ def generalization_simple_complex(
             flush=True,
         )
 
+    # G. Package outputs and optionally return the trained network.
     if verbose:
         print(
             f"[pid={os.getpid()}] generalization_simple_complex "
