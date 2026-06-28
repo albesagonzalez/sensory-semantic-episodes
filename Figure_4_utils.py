@@ -8,12 +8,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.model import SSCNetwork
 from src.utils.general import (
     make_input,
     LatentSpace,
     get_ordered_indices,
-    get_accuracy,
     test_network,
     get_prototypes,
     get_cos_sim_matrix_torch,
@@ -56,8 +54,6 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     warmup_days = 100
     higher_order_days = 1000
     input_params["num_days"] = warmup_days + higher_order_days
-    input_params["day_length"] = 80
-    input_params["mean_duration"] = 5
     input_params["latent_space"] = LatentSpace(**latent_specs)
 
     input, input_episodes, input_latents = make_input(**input_params)
@@ -195,9 +191,6 @@ def analyze_focal_episode_higher_order_selectivity(
         focal_probability=focal_probability,
     )
     input_params_local["num_days"] = 1
-    input_params_local["day_length"] = 80
-    input_params_local["mean_duration"] = 5
-    input_params_local["fixed_duration"] = True
     input_params_local["latent_space"] = LatentSpace(**latent_specs_local)
 
     network = torch.load(initial_network_path, weights_only=False)

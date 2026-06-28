@@ -1,4 +1,3 @@
-import multiprocessing
 import os
 import random
 import time
@@ -13,7 +12,6 @@ from src.model import SSCNetwork
 from src.utils.general import (
     LatentSpace,
     get_accuracy,
-    get_group_accuracy,
     get_max_overlap,
     get_ordered_accuracy,
     get_ordered_indices,
@@ -22,10 +20,6 @@ from src.utils.general import (
     make_input,
     test_network,
 )
-
-
-_GENERALIZATION_SIMPLE_COMPLEX_SHARED = None
-
 
 def seed_everything(seed=42):
     random.seed(seed)
@@ -1265,10 +1259,6 @@ def _get_ctx_simple_accuracy_from_frozen_eval_net(eval_net, eval_input_latents, 
     return result
 
 
-def _get_episode_accuracy(recordings, episode_indices, assembly_size):
-    return get_group_accuracy(recordings, episode_indices, assembly_size=assembly_size)
-
-
 def _get_ctx_episode_accuracy_from_frozen_eval_net(
     eval_net,
     eval_input_episodes,
@@ -1446,6 +1436,7 @@ def generalization_simple_complex(
     net_params["duration_phase_A"] = int(phase_A)
     net_params["duration_phase_B"] = int(phase_B)
     network = SSCNetwork(net_params, _make_recording_params())
+    
     if return_network and record:
         network.record_everything_params = _make_record_everything_params(network)
         network.return_network_records_everything = True
@@ -1780,72 +1771,6 @@ def generalization_simple_complex_job(
         record=record,
     )
 
-
-def set_generalization_simple_complex_shared_config(
-    network_parameters,
-    input_params,
-    latent_specs,
-    phase_A=200,
-    phase_B=400,
-    simple_train_days=800,
-    simple_eval_days=100,
-    complex_train_days=400,
-    complex_eval_days=100,
-    print_rate=np.inf,
-    verbose=False,
-):
-    global _GENERALIZATION_SIMPLE_COMPLEX_SHARED
-    _GENERALIZATION_SIMPLE_COMPLEX_SHARED = {
-        "network_parameters": deepcopy(network_parameters),
-        "input_params": deepcopy(input_params),
-        "latent_specs": deepcopy(latent_specs),
-        "phase_A": int(phase_A),
-        "phase_B": int(phase_B),
-        "simple_train_days": int(simple_train_days),
-        "simple_eval_days": int(simple_eval_days),
-        "complex_train_days": int(complex_train_days),
-        "complex_eval_days": int(complex_eval_days),
-        "print_rate": print_rate,
-        "verbose": bool(verbose),
-    }
-
-
-def generalization_simple_complex_shared_job(
-    network_mode,
-    num_swaps,
-    seed=None,
-    return_network=False,
-    pretrain_num_swaps=None,
-    record=False,
-):
-    if _GENERALIZATION_SIMPLE_COMPLEX_SHARED is None:
-        raise RuntimeError(
-            "Shared generalization config is not set. "
-            "Call set_generalization_simple_complex_shared_config(...) before starting the pool."
-        )
-
-    cfg = _GENERALIZATION_SIMPLE_COMPLEX_SHARED
-    return generalization_simple_complex(
-        network_parameters=deepcopy(cfg["network_parameters"]),
-        input_params=deepcopy(cfg["input_params"]),
-        latent_specs=deepcopy(cfg["latent_specs"]),
-        network_mode=network_mode,
-        num_swaps=num_swaps,
-        pretrain_num_swaps=pretrain_num_swaps,
-        seed=seed,
-        phase_A=cfg["phase_A"],
-        phase_B=cfg["phase_B"],
-        simple_train_days=cfg["simple_train_days"],
-        simple_eval_days=cfg["simple_eval_days"],
-        complex_train_days=cfg["complex_train_days"],
-        complex_eval_days=cfg["complex_eval_days"],
-        print_rate=cfg["print_rate"],
-        verbose=cfg["verbose"],
-        return_network=return_network,
-        record=record,
-    )
-
-
 def measure_charge_2_ctx_episode_selectivity(
     network,
     recording_parameters,
@@ -2040,216 +1965,6 @@ def measure_sleep_a_replay_episode_clustering_job(
     result["network_name"] = network_name
     result["seed"] = int(seed)
     return result
-
-
-def evaluate_noise_sweep(
-    semantics_absent_network,
-    semantics_present_network,
-    recording_parameters,
-    input_params,
-    latent_specs,
-    noise_levels=None,
-    days_per_level=50,
-    semantic_charge=1,
-    num_stored_recordings=0,
-    print_rate=np.inf,
-    num_workers=None,
-    multiprocessing_context="fork",
-):
-    if noise_levels is None:
-        noise_levels = list(range(int(input_params["num_swaps"]), 13))
-    else:
-        noise_levels = [int(level) for level in noise_levels]
-
-    networks = {
-        "semantics_absent": semantics_absent_network,
-        "semantics_present": semantics_present_network,
-    }
-
-    results = {
-        "noise_levels": np.array(noise_levels, dtype=int),
-        "days_per_level": int(days_per_level),
-        "semantic_charge": int(semantic_charge),
-        "num_stored_recordings": int(num_stored_recordings),
-        "by_network": {name: [] for name in networks},
-    }
-
-    experiment_params = []
-    for network_name, network in networks.items():
-        for num_swaps in noise_levels:
-            experiment_params.append(
-                (
-                    network_name,
-                    network,
-                    deepcopy(recording_parameters),
-                    deepcopy(input_params),
-                    deepcopy(latent_specs),
-                    int(num_swaps),
-                    int(days_per_level),
-                    int(semantic_charge),
-                    int(num_stored_recordings),
-                    0,
-                    print_rate,
-                )
-            )
-
-    if num_workers is None or int(num_workers) <= 1:
-        job_results = [
-            measure_sleep_a_prototype_overlap_job(*params)
-            for params in experiment_params
-        ]
-    else:
-        try:
-            mp_context = multiprocessing.get_context(multiprocessing_context)
-        except ValueError:
-            mp_context = multiprocessing.get_context()
-
-        with mp_context.Pool(processes=int(num_workers)) as pool:
-            job_results = pool.starmap(
-                measure_sleep_a_prototype_overlap_job,
-                experiment_params,
-            )
-
-    for network_name in results["by_network"]:
-        network_results = [job for job in job_results if job["network_name"] == network_name]
-        network_results.sort(key=lambda job: job["num_swaps"])
-        for job in network_results:
-            job = dict(job)
-            job.pop("network_name", None)
-            results["by_network"][network_name].append(job)
-
-    return results
-
-
-def run_codex_figure_5_seed(
-    network_parameters,
-    recording_parameters,
-    input_params,
-    latent_specs,
-    seed,
-    pretrain_num_swaps=4,
-    duration_phase_A=200,
-    duration_phase_B=400,
-    total_days=600,
-    checkpoint_day=200,
-    noise_levels=None,
-    days_per_level=50,
-    semantic_charge=1,
-    num_stored_recordings=0,
-    print_rate=50,
-    num_workers=None,
-    multiprocessing_context="fork",
-):
-    trained_networks = train_phase_split_networks(
-        network_parameters=network_parameters,
-        input_params=input_params,
-        latent_specs=latent_specs,
-        seed=seed,
-        pretrain_num_swaps=pretrain_num_swaps,
-        duration_phase_A=duration_phase_A,
-        duration_phase_B=duration_phase_B,
-        total_days=total_days,
-        checkpoint_day=checkpoint_day,
-        print_rate=print_rate,
-    )
-
-    sweep = evaluate_noise_sweep(
-        semantics_absent_network=trained_networks["semantics_absent"],
-        semantics_present_network=trained_networks["semantics_present"],
-        recording_parameters=recording_parameters,
-        input_params=input_params,
-        latent_specs=latent_specs,
-        noise_levels=noise_levels,
-        days_per_level=days_per_level,
-        semantic_charge=semantic_charge,
-        num_stored_recordings=num_stored_recordings,
-        print_rate=np.inf,
-        num_workers=num_workers,
-        multiprocessing_context=multiprocessing_context,
-    )
-    sweep["seed"] = int(seed)
-    return sweep
-
-
-def run_codex_figure_5_experiment(
-    network_parameters,
-    recording_parameters,
-    input_params,
-    latent_specs,
-    seeds,
-    pretrain_num_swaps=4,
-    duration_phase_A=200,
-    duration_phase_B=400,
-    total_days=600,
-    checkpoint_day=200,
-    noise_levels=None,
-    days_per_level=50,
-    semantic_charge=1,
-    num_stored_recordings=0,
-    print_rate=50,
-    num_workers=None,
-    multiprocessing_context="fork",
-):
-    seeds = [int(seed) for seed in seeds]
-    if noise_levels is None:
-        noise_levels = list(range(int(pretrain_num_swaps), 13))
-    else:
-        noise_levels = [int(level) for level in noise_levels]
-
-    per_seed_results = []
-    for seed in seeds:
-        per_seed_results.append(
-            run_codex_figure_5_seed(
-                network_parameters=network_parameters,
-                recording_parameters=recording_parameters,
-                input_params=input_params,
-                latent_specs=latent_specs,
-                seed=seed,
-                pretrain_num_swaps=pretrain_num_swaps,
-                duration_phase_A=duration_phase_A,
-                duration_phase_B=duration_phase_B,
-                total_days=total_days,
-                checkpoint_day=checkpoint_day,
-                noise_levels=noise_levels,
-                days_per_level=days_per_level,
-                semantic_charge=semantic_charge,
-                num_stored_recordings=num_stored_recordings,
-                print_rate=print_rate,
-                num_workers=num_workers,
-                multiprocessing_context=multiprocessing_context,
-            )
-        )
-
-    aggregate = {
-        "seeds": seeds,
-        "noise_levels": np.array(noise_levels, dtype=int),
-        "days_per_level": int(days_per_level),
-        "semantic_charge": int(semantic_charge),
-        "num_stored_recordings": int(num_stored_recordings),
-        "per_seed": per_seed_results,
-        "summary": {},
-    }
-
-    for network_name in ["semantics_absent", "semantics_present"]:
-        seed_curves = np.stack(
-            [
-                np.array(
-                    [entry["mean_max_overlap"] for entry in seed_result["by_network"][network_name]],
-                    dtype=float,
-                )
-                for seed_result in per_seed_results
-            ],
-            axis=0,
-        )
-
-        aggregate["summary"][network_name] = {
-            "seed_curves": seed_curves,
-            "mean_curve": seed_curves.mean(axis=0),
-            "std_curve": seed_curves.std(axis=0),
-        }
-
-    return aggregate
-
 
 def plot_codex_figure_5(
     results,

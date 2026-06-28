@@ -78,45 +78,6 @@ class SSCNetwork(nn.Module):
             self.time_index += 1
             self.awake_indices.append(self.time_index)
         self.day += 1
-
-
-    def latent_to_mtl_semantic(self, latent):
-        latent_tensor = torch.as_tensor(latent).long().flatten()
-        if latent_tensor.numel() == 0:
-            raise ValueError("latent_to_mtl_semantic requires at least one latent index.")
-
-        assembly_size = int(
-            self.mtl_semantic_size_subregions[0] * self.mtl_semantic_sparsity[0] / self.max_semantic_charge_input
-        )
-        if assembly_size <= 0:
-            raise ValueError(
-                "MTL-semantic assembly size must be positive. "
-                f"Got size={int(self.mtl_semantic_size_subregions[0])}, "
-                f"sparsity={float(self.mtl_semantic_sparsity[0])}, "
-                f"max_semantic_charge_input={float(self.max_semantic_charge_input)}."
-            )
-
-        total_concepts = int(self.mtl_semantic_size / assembly_size)
-        if total_concepts % latent_tensor.numel() != 0:
-            raise ValueError(
-                "Cannot evenly map latent dimensions into MTL-semantic assemblies. "
-                f"Got total_concepts={total_concepts} and num_latent_dims={latent_tensor.numel()}."
-            )
-        concepts_per_dimension = total_concepts // latent_tensor.numel()
-
-        semantic_state = torch.zeros(self.mtl_semantic_size, dtype=self.mtl_semantic.dtype)
-        for dim_index, concept_index in enumerate(latent_tensor.tolist()):
-            if concept_index < 0 or concept_index >= concepts_per_dimension:
-                raise ValueError(
-                    f"Latent index {concept_index} out of range for dimension {dim_index}. "
-                    f"Expected 0 <= index < {concepts_per_dimension}."
-                )
-            global_concept_index = dim_index * concepts_per_dimension + concept_index
-            start = global_concept_index * assembly_size
-            end = start + assembly_size
-            semantic_state[start:end] = 1
-
-        return semantic_state
     
 
     def sleep(self):
@@ -428,3 +389,43 @@ class SSCNetwork(nn.Module):
 
       #initialize day count
       self.day = 0
+
+
+
+    def latent_to_mtl_semantic(self, latent):
+        latent_tensor = torch.as_tensor(latent).long().flatten()
+        if latent_tensor.numel() == 0:
+            raise ValueError("latent_to_mtl_semantic requires at least one latent index.")
+
+        assembly_size = int(
+            self.mtl_semantic_size_subregions[0] * self.mtl_semantic_sparsity[0] / self.max_semantic_charge_input
+        )
+        if assembly_size <= 0:
+            raise ValueError(
+                "MTL-semantic assembly size must be positive. "
+                f"Got size={int(self.mtl_semantic_size_subregions[0])}, "
+                f"sparsity={float(self.mtl_semantic_sparsity[0])}, "
+                f"max_semantic_charge_input={float(self.max_semantic_charge_input)}."
+            )
+
+        total_concepts = int(self.mtl_semantic_size / assembly_size)
+        if total_concepts % latent_tensor.numel() != 0:
+            raise ValueError(
+                "Cannot evenly map latent dimensions into MTL-semantic assemblies. "
+                f"Got total_concepts={total_concepts} and num_latent_dims={latent_tensor.numel()}."
+            )
+        concepts_per_dimension = total_concepts // latent_tensor.numel()
+
+        semantic_state = torch.zeros(self.mtl_semantic_size, dtype=self.mtl_semantic.dtype)
+        for dim_index, concept_index in enumerate(latent_tensor.tolist()):
+            if concept_index < 0 or concept_index >= concepts_per_dimension:
+                raise ValueError(
+                    f"Latent index {concept_index} out of range for dimension {dim_index}. "
+                    f"Expected 0 <= index < {concepts_per_dimension}."
+                )
+            global_concept_index = dim_index * concepts_per_dimension + concept_index
+            start = global_concept_index * assembly_size
+            end = start + assembly_size
+            semantic_state[start:end] = 1
+
+        return semantic_state
