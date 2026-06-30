@@ -6,9 +6,10 @@ import torch
 import torch.nn.functional as F
 
 from src.model import SSCNetwork
-from src.utils.general import LatentSpace, get_ordered_indices, test_network
+from src.utils.episode_generation_protocol import LatentSpace
+from src.utils.general import get_ordered_indices, test_network
 
-from network_parameters import network_parameters
+from src.network_parameters import network_parameters
 
 
 DEFAULT_TRAINING_RECORDING_PARAMETERS = {
@@ -67,7 +68,7 @@ def run_default_600_day_selectivity(seed=0, print_rate=50, return_network=False)
     net_params = deepcopy(network_parameters)
     net_params["duration_phase_A"] = 200
     net_params["duration_phase_B"] = 400
-    net_params["max_semantic_charge_replay"] = 2
+    net_params["max_semantic_load_replay"] = 2
 
     network = SSCNetwork(net_params, training_recording_parameters)
     _, _, _, network = test_network(

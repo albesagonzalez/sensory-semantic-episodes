@@ -7,12 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.model import SSCNetwork
-from src.utils.general import (
+from src.utils.episode_generation_protocol import (
     LatentSpace,
-    get_cos_sim_torch,
-    get_sample_from_num_swaps,
     make_input,
 )
+from src.utils.general import get_cos_sim_torch, get_sample_from_num_swaps
 
 
 class SparseHopfieldNetwork(nn.Module):

@@ -9,15 +9,17 @@ import torch
 import torch.nn.functional as F
 
 from src.model import SSCNetwork
-from src.utils.general import (
+from src.utils.episode_generation_protocol import (
     LatentSpace,
+    get_prototypes,
+    make_input,
+)
+from src.utils.general import (
     get_accuracy,
     get_max_overlap,
     get_ordered_accuracy,
     get_ordered_indices,
-    get_prototypes,
     get_signal_to_noise_ratio,
-    make_input,
     test_network,
 )
 
@@ -178,9 +180,9 @@ def _get_replay_pattern_snr(
     }
 
 
-def _get_sleep_a_replays_for_semantic_charge(
+def _get_sleep_a_replays_for_semantic_load(
     eval_net,
-    semantic_charge,
+    semantic_load,
     simulation_num_days,
     simulation_start_day,
     region_name="mtl_sensory",
@@ -189,13 +191,13 @@ def _get_sleep_a_replays_for_semantic_charge(
         eval_net.activity_recordings[region_name], dim=0
     )[eval_net.sleep_indices_A].detach()
 
-    if semantic_charge == 1:
+    if semantic_load == 1:
         return replayed_mtl_sensory
 
-    if semantic_charge != 2:
-        raise ValueError("semantic_charge must be 1 or 2.")
+    if semantic_load != 2:
+        raise ValueError("semantic_load must be 1 or 2.")
 
-    if int(getattr(eval_net, "max_semantic_charge_replay", 1)) < 2:
+    if int(getattr(eval_net, "max_semantic_load_replay", 1)) < 2:
         return replayed_mtl_sensory[:0]
 
     sleep_duration_a = int(eval_net.sleep_duration_A)
@@ -211,13 +213,13 @@ def _get_sleep_a_replays_for_semantic_charge(
         -1,
     )
 
-    charge_2_start = int(sleep_duration_a // 2)
+    load_2_start = int(sleep_duration_a // 2)
     selected_replays = []
     for day_offset in range(int(simulation_num_days)):
         sleep_day = int(simulation_start_day) + day_offset + 1
         if sleep_day <= int(eval_net.duration_phase_B):
             continue
-        selected_replays.append(replayed_mtl_sensory[day_offset, charge_2_start:, :])
+        selected_replays.append(replayed_mtl_sensory[day_offset, load_2_start:, :])
 
     if len(selected_replays) == 0:
         return replayed_mtl_sensory.new_empty((0, replayed_mtl_sensory.shape[-1]))
@@ -315,7 +317,7 @@ def measure_sleep_a_prototype_overlap(
     latent_specs,
     num_swaps,
     num_days=50,
-    semantic_charge=1,
+    semantic_load=1,
     num_stored_recordings=0,
     seed=None,
     print_rate=np.inf,
@@ -345,7 +347,7 @@ def measure_sleep_a_prototype_overlap(
         num_swaps=num_swaps,
     )
 
-    prototypes = get_prototypes(eval_input_params["latent_space"], semantic_charge=semantic_charge)
+    prototypes = get_prototypes(eval_input_params["latent_space"], semantic_load=semantic_load)
     if verbose:
         print(
             f"[pid={os.getpid()}] overlap"
@@ -381,9 +383,9 @@ def measure_sleep_a_prototype_overlap(
                 flush=True,
             )
 
-        replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_charge(
+        replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_load(
             eval_net,
-            semantic_charge=semantic_charge,
+            semantic_load=semantic_load,
             simulation_num_days=eval_input_params["num_days"],
             simulation_start_day=simulation_start_day,
         )
@@ -431,7 +433,7 @@ def measure_sleep_a_prototype_overlap_job(
     latent_specs,
     num_swaps,
     num_days,
-    semantic_charge,
+    semantic_load,
     num_stored_recordings,
     seed,
     print_rate,
@@ -444,7 +446,7 @@ def measure_sleep_a_prototype_overlap_job(
         latent_specs=latent_specs,
         num_swaps=num_swaps,
         num_days=num_days,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         num_stored_recordings=num_stored_recordings,
         seed=seed,
         print_rate=print_rate,
@@ -464,7 +466,7 @@ def build_codex_figure_5_experiment_params(
     seeds,
     noise_levels,
     days_per_level=50,
-    semantic_charge=1,
+    semantic_load=1,
     num_stored_recordings=0,
     print_rate=np.inf,
     verbose=False,
@@ -482,7 +484,7 @@ def build_codex_figure_5_experiment_params(
                         deepcopy(latent_specs),
                         int(num_swaps),
                         int(days_per_level),
-                        int(semantic_charge),
+                        int(semantic_load),
                         int(num_stored_recordings),
                         int(seed),
                         print_rate,
@@ -510,7 +512,7 @@ def aggregate_codex_figure_5_results(job_results, noise_levels=None, seeds=None)
         "seeds": seeds,
         "noise_levels": np.array(noise_levels, dtype=int),
         "days_per_level": int(job_results[0]["num_days"]),
-        "semantic_charge": int(job_results[0].get("semantic_charge", 1)),
+        "semantic_load": int(job_results[0].get("semantic_load", 1)),
         "num_stored_recordings": int(job_results[0].get("num_stored_recordings", 0)),
         "per_seed": {},
         "summary": {},
@@ -568,7 +570,7 @@ def aggregate_codex_figure_5_generalization_results(job_results, noise_levels=No
         "seeds": seeds,
         "noise_levels": np.array(noise_levels, dtype=int),
         "days_per_level": int(job_results[0]["num_days"]),
-        "semantic_charge": int(job_results[0].get("semantic_charge", 1)),
+        "semantic_load": int(job_results[0].get("semantic_load", 1)),
         "num_stored_recordings": int(job_results[0].get("num_stored_recordings", 0)),
         "per_seed": {},
         "summary": {},
@@ -625,7 +627,7 @@ def measure_sleep_a_awake_generalization(
     latent_specs,
     num_swaps,
     num_days=50,
-    semantic_charge=1,
+    semantic_load=1,
     num_stored_recordings=0,
     seed=None,
     print_rate=np.inf,
@@ -650,7 +652,7 @@ def measure_sleep_a_awake_generalization(
         num_swaps=num_swaps,
     )
 
-    prototypes = get_prototypes(eval_input_params["latent_space"], semantic_charge=semantic_charge)
+    prototypes = get_prototypes(eval_input_params["latent_space"], semantic_load=semantic_load)
     if verbose:
         print(
             f"[pid={os.getpid()}] generalization"
@@ -691,9 +693,9 @@ def measure_sleep_a_awake_generalization(
                 flush=True,
             )
 
-        replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_charge(
+        replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_load(
             eval_net,
-            semantic_charge=semantic_charge,
+            semantic_load=semantic_load,
             simulation_num_days=eval_input_params["num_days"],
             simulation_start_day=simulation_start_day,
         )
@@ -733,7 +735,7 @@ def measure_sleep_a_awake_generalization(
             return_indices=True,
         )
 
-    if semantic_charge == 2:
+    if semantic_load == 2:
         replay_pattern_snr = _get_replay_pattern_snr(
             replayed_mtl_sensory,
             prototypes,
@@ -797,7 +799,7 @@ def measure_sleep_a_awake_generalization(
             )
         a_idx = int(awake_latents_flat[awake_idx, 0].item())
         b_idx = int(awake_latents_flat[awake_idx, 1].item())
-        if semantic_charge == 1:
+        if semantic_load == 1:
             concept_a = a_idx
             concept_b = num_A + b_idx
             present_mask = (inferred_concepts_cpu == concept_a) | (
@@ -805,12 +807,12 @@ def measure_sleep_a_awake_generalization(
             )
             target_entry = (concept_a, concept_b)
             target_index = -1
-        elif semantic_charge == 2:
+        elif semantic_load == 2:
             target_index = int(latent_space.label_to_index[(a_idx, b_idx)])
             present_mask = inferred_concepts_cpu == target_index
             target_entry = (a_idx, b_idx)
         else:
-            raise ValueError("semantic_charge must be 1 or 2.")
+            raise ValueError("semantic_load must be 1 or 2.")
 
         if (not bool(present_mask.any().item())) or (not bool((~present_mask).any().item())):
             continue
@@ -846,7 +848,7 @@ def measure_sleep_a_awake_generalization(
     return {
         "num_swaps": int(num_swaps),
         "num_days": int(num_days),
-        "semantic_charge": int(semantic_charge),
+        "semantic_load": int(semantic_load),
         "num_awake": int(awake_mtl_sensory.shape[0]),
         "num_valid_awake": int(len(margins)),
         "num_replays": int(replayed_mtl_sensory.shape[0]),
@@ -879,7 +881,7 @@ def measure_sleep_a_replay_episode_clustering(
     latent_specs,
     num_swaps,
     num_days=50,
-    semantic_charge=1,
+    semantic_load=1,
     num_stored_recordings=0,
     seed=None,
     print_rate=np.inf,
@@ -910,7 +912,7 @@ def measure_sleep_a_replay_episode_clustering(
     )
     label_prototypes = get_prototypes(
         eval_input_params["latent_space"],
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
     )
 
     eval_net = network
@@ -932,16 +934,16 @@ def measure_sleep_a_replay_episode_clustering(
         job_label=f"replay-clustering:{network_name}:seed={seed}:swaps={num_swaps}",
     )
 
-    replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_charge(
+    replayed_mtl_sensory = _get_sleep_a_replays_for_semantic_load(
         eval_net,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         simulation_num_days=eval_input_params["num_days"],
         simulation_start_day=simulation_start_day,
         region_name="mtl_sensory",
     )
-    replayed_mtl_full = _get_sleep_a_replays_for_semantic_charge(
+    replayed_mtl_full = _get_sleep_a_replays_for_semantic_load(
         eval_net,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         simulation_num_days=eval_input_params["num_days"],
         simulation_start_day=simulation_start_day,
         region_name="mtl",
@@ -1003,7 +1005,7 @@ def measure_sleep_a_replay_episode_clustering(
     return {
         "num_swaps": int(num_swaps),
         "num_days": int(num_days),
-        "semantic_charge": int(semantic_charge),
+        "semantic_load": int(semantic_load),
         "num_replays": int(replayed_mtl_full.shape[0]),
         "num_valid_replays": int(len(margins)),
         "num_stored_recordings": int(stored_recordings_sensory.shape[0]),
@@ -1035,7 +1037,7 @@ def measure_sleep_a_awake_generalization_job(
     latent_specs,
     num_swaps,
     num_days,
-    semantic_charge,
+    semantic_load,
     num_stored_recordings,
     seed,
     print_rate,
@@ -1048,7 +1050,7 @@ def measure_sleep_a_awake_generalization_job(
         latent_specs=latent_specs,
         num_swaps=num_swaps,
         num_days=num_days,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         num_stored_recordings=num_stored_recordings,
         seed=seed,
         print_rate=print_rate,
@@ -1067,7 +1069,7 @@ def measure_ctx_latent_accuracy(
     latent_specs,
     num_swaps,
     num_days=50,
-    semantic_charge=1,
+    semantic_load=1,
     num_stored_recordings=0,
     seed=None,
     print_rate=np.inf,
@@ -1076,8 +1078,8 @@ def measure_ctx_latent_accuracy(
 ):
     del recording_parameters, num_stored_recordings
 
-    if semantic_charge != 1:
-        raise ValueError("measure_ctx_latent_accuracy expects semantic_charge=1.")
+    if semantic_load != 1:
+        raise ValueError("measure_ctx_latent_accuracy expects semantic_load=1.")
 
     if seed is not None:
         seed_everything(seed)
@@ -1157,7 +1159,7 @@ def measure_ctx_latent_accuracy(
     return {
         "num_swaps": int(num_swaps),
         "num_days": int(num_days),
-        "semantic_charge": int(semantic_charge),
+        "semantic_load": int(semantic_load),
         "ctx_accuracy_A": float(ctx_accuracy[0].item()),
         "ctx_accuracy_B": float(ctx_accuracy[1].item()),
         "ctx_accuracy_mean": float(ctx_accuracy.mean().item()),
@@ -1177,7 +1179,7 @@ def measure_ctx_latent_accuracy_job(
     latent_specs,
     num_swaps,
     num_days,
-    semantic_charge,
+    semantic_load,
     num_stored_recordings,
     seed,
     print_rate,
@@ -1190,7 +1192,7 @@ def measure_ctx_latent_accuracy_job(
         latent_specs=latent_specs,
         num_swaps=num_swaps,
         num_days=num_days,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         num_stored_recordings=num_stored_recordings,
         seed=seed,
         print_rate=print_rate,
@@ -1572,7 +1574,7 @@ def generalization_simple_complex(
     # E. Continue training with charge-2 replay to form complex concepts.
     complex_train_net = network if return_network else deepcopy(network)
     complex_train_net.frozen = False
-    complex_train_net.max_semantic_charge_replay = 2
+    complex_train_net.max_semantic_load_replay = 2
     if not return_network:
         complex_train_net.init_recordings(_make_recording_params())
 
@@ -1778,14 +1780,14 @@ def generalization_simple_complex_job(
         record=record,
     )
 
-def measure_charge_2_ctx_episode_selectivity(
+def measure_load_2_ctx_episode_selectivity(
     network,
     recording_parameters,
     input_params,
     latent_specs,
     num_swaps,
     num_days=200,
-    semantic_charge=2,
+    semantic_load=2,
     num_stored_recordings=0,
     seed=None,
     print_rate=np.inf,
@@ -1795,14 +1797,14 @@ def measure_charge_2_ctx_episode_selectivity(
 ):
     del recording_parameters, num_stored_recordings
 
-    if semantic_charge != 2:
-        raise ValueError("measure_charge_2_ctx_episode_selectivity expects semantic_charge=2.")
+    if semantic_load != 2:
+        raise ValueError("measure_load_2_ctx_episode_selectivity expects semantic_load=2.")
 
     if seed is not None:
         seed_everything(seed)
 
     train_net = deepcopy(network)
-    train_net.max_semantic_charge_replay = 2
+    train_net.max_semantic_load_replay = 2
     train_net.frozen = False
     train_net.init_recordings(_make_recording_params())
 
@@ -1896,7 +1898,7 @@ def measure_charge_2_ctx_episode_selectivity(
     return {
         "num_swaps": int(num_swaps),
         "num_days": int(num_days),
-        "semantic_charge": int(semantic_charge),
+        "semantic_load": int(semantic_load),
         "ctx_episode_selectivity": float(ctx_episode_selectivity.item()),
         # Alias for reusing the existing scalar-results aggregator/plot path.
         "mean_margin": float(ctx_episode_selectivity.item()),
@@ -1908,7 +1910,7 @@ def measure_charge_2_ctx_episode_selectivity(
     }
 
 
-def measure_charge_2_ctx_episode_selectivity_job(
+def measure_load_2_ctx_episode_selectivity_job(
     network_name,
     network,
     recording_parameters,
@@ -1916,20 +1918,20 @@ def measure_charge_2_ctx_episode_selectivity_job(
     latent_specs,
     num_swaps,
     num_days,
-    semantic_charge,
+    semantic_load,
     num_stored_recordings,
     seed,
     print_rate,
     verbose=False,
 ):
-    result = measure_charge_2_ctx_episode_selectivity(
+    result = measure_load_2_ctx_episode_selectivity(
         network=deepcopy(network),
         recording_parameters=recording_parameters,
         input_params=input_params,
         latent_specs=latent_specs,
         num_swaps=num_swaps,
         num_days=num_days,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         num_stored_recordings=num_stored_recordings,
         seed=seed,
         print_rate=print_rate,
@@ -1949,7 +1951,7 @@ def measure_sleep_a_replay_episode_clustering_job(
     latent_specs,
     num_swaps,
     num_days,
-    semantic_charge,
+    semantic_load,
     num_stored_recordings,
     seed,
     print_rate,
@@ -1962,7 +1964,7 @@ def measure_sleep_a_replay_episode_clustering_job(
         latent_specs=latent_specs,
         num_swaps=num_swaps,
         num_days=num_days,
-        semantic_charge=semantic_charge,
+        semantic_load=semantic_load,
         num_stored_recordings=num_stored_recordings,
         seed=seed,
         print_rate=print_rate,

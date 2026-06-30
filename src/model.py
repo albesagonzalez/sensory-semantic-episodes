@@ -82,11 +82,11 @@ class SSCNetwork(nn.Module):
 
     def sleep(self):
 
-      #add semantic charge schedule
-      semantic_charge_schedule = torch.ones(self.sleep_duration_A, dtype=int)
+      #add semantic load schedule
+      semantic_load_schedule = torch.ones(self.sleep_duration_A, dtype=int)
 
-      if self.max_semantic_charge_replay == 2:
-        semantic_charge_schedule[int(self.sleep_duration_A//2):] = 2
+      if self.max_semantic_load_replay == 2:
+        semantic_load_schedule[int(self.sleep_duration_A//2):] = 2
 
       #sleep has two phases, episodic replay and semantic replay
       
@@ -113,21 +113,21 @@ class SSCNetwork(nn.Module):
           self.homeostasis('ctx', 'ctx')
 
         else:
-          #semantic_charge = torch.randint(low=1, high=self.max_semantic_charge_replay+1, size=(1,))[0]
-          semantic_charge = semantic_charge_schedule[timestep]
-          self.mtl = self.mtl_generate(semantic_charge)
+          #semantic_load = torch.randint(low=1, high=self.max_semantic_load_replay+1, size=(1,))[0]
+          semantic_load = semantic_load_schedule[timestep]
+          self.mtl = self.mtl_generate(semantic_load)
           self.mtl_sensory = self.mtl[:self.mtl_sensory_size].clone()
           self.mtl_semantic = self.mtl[self.mtl_sensory_size:].clone()
           self.ctx_hat = F.linear(self.mtl, self.ctx_mtl) + self.ctx_b*self.ctx_IM
-          self.ctx, _ = self.activation(self.ctx_hat, 'ctx', subregion_index=semantic_charge-1, sleep=True)
+          self.ctx, _ = self.activation(self.ctx_hat, 'ctx', subregion_index=semantic_load-1, sleep=True)
           ctx_pointer = self.ctx.clone()
 
           self.hebbian('ctx', 'mtl')
 
-          if semantic_charge == 1:
+          if semantic_load == 1:
             self.hebbian('ctx', 'ctx', sleep=True)
 
-          if semantic_charge == self.max_semantic_charge_replay:
+          if semantic_load == self.max_semantic_load_replay:
             IM = getattr(self, 'ctx' + '_IM')
             ctx_pointer_definition, _ = self.activation(self.ctx_hat, 'ctx')
             IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/ (self.ctx_size_subregions*self.ctx_sparsity).sum()
@@ -204,11 +204,11 @@ class SSCNetwork(nn.Module):
         return h
     
 
-    def mtl_generate(self, semantic_charge, num_iterations=None):
+    def mtl_generate(self, semantic_load, num_iterations=None):
         num_iterations = num_iterations  if num_iterations != None else getattr(self, 'mtl_generate_pattern_complete_iterations')
         if getattr(self, "sensory_replay_only", False):
             mtl_sensory_sparsity = (
-                semantic_charge / self.max_semantic_charge_input
+                semantic_load / self.max_semantic_load_input
             ) * self.mtl_sensory_sparsity.clone()
             h_random = torch.randn(self.mtl_sensory_size)
             h_sensory = self.pattern_complete(
@@ -223,7 +223,7 @@ class SSCNetwork(nn.Module):
             return h
         
         else:
-          mtl_sparsity = (semantic_charge/self.max_semantic_charge_input)*self.mtl_sparsity.clone()
+          mtl_sparsity = (semantic_load/self.max_semantic_load_input)*self.mtl_sparsity.clone()
           h_random = torch.randn(self.mtl_size)
           h = self.pattern_complete('mtl', h_0=h_random, h_conditioned=None, num_iterations=num_iterations, sparsity=mtl_sparsity)
         return h
@@ -247,7 +247,7 @@ class SSCNetwork(nn.Module):
             IM = getattr(self, post_region + '_IM')
             if sleep:
               IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/ (self.ctx_size_subregions*self.ctx_sparsity).sum()
-              lmbda = IM_lmbda*IM
+              lmbda = lmbda*(1 - IM) + IM_lmbda*IM
               lmbda = lmbda[None, :]
             else:
               pass
@@ -398,14 +398,14 @@ class SSCNetwork(nn.Module):
             raise ValueError("latent_to_mtl_semantic requires at least one latent index.")
 
         assembly_size = int(
-            self.mtl_semantic_size_subregions[0] * self.mtl_semantic_sparsity[0] / self.max_semantic_charge_input
+            self.mtl_semantic_size_subregions[0] * self.mtl_semantic_sparsity[0] / self.max_semantic_load_input
         )
         if assembly_size <= 0:
             raise ValueError(
                 "MTL-semantic assembly size must be positive. "
                 f"Got size={int(self.mtl_semantic_size_subregions[0])}, "
                 f"sparsity={float(self.mtl_semantic_sparsity[0])}, "
-                f"max_semantic_charge_input={float(self.max_semantic_charge_input)}."
+                f"max_semantic_load_input={float(self.max_semantic_load_input)}."
             )
 
         total_concepts = int(self.mtl_semantic_size / assembly_size)

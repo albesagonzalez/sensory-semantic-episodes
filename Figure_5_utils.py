@@ -9,12 +9,11 @@ import torch
 import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression
 
-from src.utils.general import (
+from src.utils.episode_generation_protocol import (
     LatentSpace,
-    get_cos_sim_torch,
-    get_sample_from_num_swaps,
     make_input,
 )
+from src.utils.general import get_cos_sim_torch, get_sample_from_num_swaps
 
 def seed_everything(seed=0):
     random.seed(seed)
@@ -957,7 +956,7 @@ def run_synaptic_engrams_experiment(
     net_params = deepcopy(network_parameters)
     net_params["duration_phase_A"] = 1
     net_params["duration_phase_B"] = 1
-    net_params["max_semantic_charge_replay"] = 2
+    net_params["max_semantic_load_replay"] = 2
 
     recording_parameters = {
         "regions": ["mtl_sensory", "mtl_semantic", "mtl", "ctx", "ctx_hat"],

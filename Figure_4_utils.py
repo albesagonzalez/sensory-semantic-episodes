@@ -8,12 +8,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.utils.general import (
-    make_input,
+from src.utils.episode_generation_protocol import (
     LatentSpace,
+    get_prototypes,
+    make_input,
+)
+from src.utils.general import (
     get_ordered_indices,
     test_network,
-    get_prototypes,
     get_cos_sim_matrix_torch,
 )
 
@@ -65,7 +67,7 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
         for day in range(input_params["num_days"]):
             if day%print_rate == 0:
                 print(day)
-            network.max_semantic_charge_replay = 1 if day < warmup_days else 2
+            network.max_semantic_load_replay = 1 if day < warmup_days else 2
             network(input[day], debug=False)
             if sleep:
                 network.sleep()
@@ -129,7 +131,7 @@ def _summarize_complex_receptive_fields(
     episode_probabilities = [
         float(latent_space.label_to_probs[label]) for label in latent_space.index_to_label
     ]
-    episode_prototypes = get_prototypes(latent_space, semantic_charge=2)
+    episode_prototypes = get_prototypes(latent_space, semantic_load=2)
     ctx_subregion1_rf = network.ctx_mtl[
         network.ctx_subregions[1]
     ][:, network.mtl_sensory_size + network.ordered_indices_mtl_semantic].detach()
@@ -194,7 +196,7 @@ def analyze_focal_episode_higher_order_selectivity(
     input_params_local["latent_space"] = LatentSpace(**latent_specs_local)
 
     network = torch.load(initial_network_path, weights_only=False)
-    network.max_semantic_charge_replay = 2
+    network.max_semantic_load_replay = 2
     network.init_recordings(rec_params)
     network.frozen = False
     network.activity_recordings_rate = 1

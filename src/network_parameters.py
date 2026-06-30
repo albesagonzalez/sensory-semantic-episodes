@@ -33,8 +33,8 @@ network_parameters["mtl_semantic_pattern_complete_iterations"] = 10
 network_parameters["ctx_pattern_complete_iterations"] = 10
 network_parameters["mtl_generate_pattern_complete_iterations"] = 10
 
-network_parameters["max_semantic_charge_replay"] = 1
-network_parameters["max_semantic_charge_input"] = 2
+network_parameters["max_semantic_load_replay"] = 1
+network_parameters["max_semantic_load_input"] = 2
 
 ##################
 #region parameters

@@ -6,12 +6,14 @@ import torch
 import torch.nn.functional as F
 
 from src.model import SSCNetwork
-from src.utils.general import (
+from src.utils.episode_generation_protocol import (
     LatentSpace,
+    make_input,
+)
+from src.utils.general import (
     get_max_overlap,
     get_ordered_indices,
     get_signal_to_noise_ratio,
-    make_input,
 )
 
 

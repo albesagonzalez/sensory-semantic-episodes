@@ -8,9 +8,8 @@ import numpy as np
 import torch
 
 from src.model import SSCNetwork
-
-
-from src.utils.general import LatentSpace, test_network
+from src.utils.episode_generation_protocol import LatentSpace
+from src.utils.general import test_network
 
 
 def seed_everything(seed=42):
