@@ -9,7 +9,7 @@ import torch
 
 from src.model import SSCNetwork
 from src.utils.episode_generation_protocol import LatentSpace
-from src.utils.general import test_network
+from src.utils.general import train_network
 
 
 def seed_everything(seed=42):
@@ -123,7 +123,7 @@ def analyze_dirichlet_sleep_receptive_fields(
     input_params_local["latent_space"] = LatentSpace(**latent_specs_local)
 
     network = SSCNetwork(net_params, rec_params)
-    input, input_episodes, input_latents, network = test_network(
+    input, input_episodes, input_latents, network = train_network(
         network, input_params_local, sleep=True, print_rate=np.inf
     )
 
@@ -196,7 +196,7 @@ def analyze_focal_concept_sleep_receptive_fields(
     input_params_local["latent_space"] = LatentSpace(**latent_specs_local)
 
     network = SSCNetwork(net_params, rec_params)
-    input, input_episodes, input_latents, network = test_network(
+    input, input_episodes, input_latents, network = train_network(
         network, input_params_local, sleep=True, print_rate=np.inf
     )
 
@@ -336,24 +336,6 @@ def analyze_focal_concept_sleep_receptive_fields_many_seeds(
         "all_focal_concept_pairs": all_focal_concept_pairs,
         "num_mature": [result["num_mature"] for result in results_list],
         "formed_concepts": [result["formed_concepts"] for result in results_list],
-        "results_list": results_list,
-    }
-    all_concept_formation_pairs = [
-        pair for result in results_list for pair in result["concept_formation_pairs"]
-    ]
-
-    return {
-        "seed": [result["seed"] for result in results_list],
-        "dirichlet_probs": [result["dirichlet_probs"] for result in results_list],
-        "num_mature": [result["num_mature"] for result in results_list],
-        "formed_concepts": [result["formed_concepts"] for result in results_list],
-        "neuron_to_concept": [result["neuron_to_concept"] for result in results_list],
-        "concept_formation_pairs": [result["concept_formation_pairs"] for result in results_list],
-        "all_concept_formation_pairs": all_concept_formation_pairs,
-        "concept_frequency": concept_frequency,
-        "formed_concepts_union": sorted(
-            set().union(*(set(result["formed_concepts"]) for result in results_list))
-        ),
         "results_list": results_list,
     }
 

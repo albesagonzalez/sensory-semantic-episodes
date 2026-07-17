@@ -10,6 +10,82 @@ from src.utils.episode_generation_protocol import (
     make_input,
 )
 
+def get_selectivity(recordings, latents, debug_label=None):
+    recordings_tensor = torch.as_tensor(recordings).float()
+    latents_tensor = torch.as_tensor(latents).float()
+
+    recordings_flat = recordings_tensor.reshape(-1, recordings_tensor.shape[-1])
+    latents_flat = latents_tensor.reshape(-1, latents_tensor.shape[-1])
+
+    latents_centered = latents_flat - latents_flat.mean(dim=0, keepdim=True)
+    recordings_centered = recordings_flat - recordings_flat.mean(dim=0, keepdim=True)
+
+    eps = 1e-8
+    latents_scale = torch.sqrt((latents_centered.pow(2).mean(dim=0, keepdim=True)).clamp_min(eps))
+    recordings_scale = torch.sqrt((recordings_centered.pow(2).mean(dim=0, keepdim=True)).clamp_min(eps))
+    latents_norm = latents_centered / latents_scale
+    recordings_norm = recordings_centered / recordings_scale
+
+    selectivity = recordings_norm.T @ latents_norm / latents_norm.shape[0]
+    selectivity[torch.isnan(selectivity)] = 0
+
+    return selectivity
+
+
+def get_ordered_indices(
+    recordings,
+    latents,
+    assembly_size,
+    seed=None,
+    debug_label=None,
+    assemblies_only=True,
+):
+    selectivity = get_selectivity(recordings, latents, debug_label=debug_label)
+    N, L = selectivity.shape
+    if N < L * int(assembly_size):
+        raise ValueError(
+            f"Not enough neurons ({N}) to assign {assembly_size} neurons to each of {L} latents."
+        )
+
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device=selectivity.device)
+        generator.manual_seed(int(seed))
+
+    assemblies = [[] for _ in range(L)]
+    available = torch.ones(N, dtype=torch.bool, device=selectivity.device)
+
+    for round_idx in range(int(assembly_size)):
+        latent_order = torch.randperm(L, generator=generator, device=selectivity.device)
+        available_indices = torch.nonzero(available, as_tuple=False).flatten()
+        if available_indices.numel() < L:
+            raise RuntimeError(
+                "Available neuron pool was exhausted before all assemblies were filled."
+            )
+
+        scores = selectivity[available_indices][:, latent_order]
+        claimed_positions = []
+        claimed_neurons = []
+
+        for order_idx in range(L):
+            latent_scores = scores[:, order_idx]
+            if claimed_positions:
+                latent_scores = latent_scores.clone()
+                latent_scores[torch.tensor(claimed_positions, device=latent_scores.device)] = -torch.inf
+            best_pos = torch.argmax(latent_scores)
+            claimed_positions.append(int(best_pos.item()))
+            claimed_neurons.append(int(available_indices[best_pos].item()))
+
+        for latent_idx, neuron_idx in zip(latent_order.tolist(), claimed_neurons):
+            assemblies[latent_idx].append(neuron_idx)
+            available[neuron_idx] = False
+
+    flat_indices = [neuron for assembly in assemblies for neuron in assembly]
+    if not assemblies_only:
+        leftover_neurons = torch.nonzero(available, as_tuple=False).flatten().tolist()
+        flat_indices.extend(leftover_neurons)
+    return selectivity, torch.tensor(flat_indices, dtype=torch.long)
+
 
 def get_signal_to_noise_ratio(
     num_swaps,
@@ -18,32 +94,6 @@ def get_signal_to_noise_ratio(
     return_per_subregion: bool = False,
     sleep: bool = False,
 ):
-    """
-    Compute an effective signal-to-noise ratio associated with ``num_swaps``.
-
-    The quantity follows the overlap-based heuristic used in earlier analyses:
-    signal = expected overlap with the original pattern minus expected overlap
-    with a random sparse pattern, and noise = total number of flipped bits.
-
-    For ``num_swaps == 0`` the function returns ``inf`` by convention.
-
-    Args:
-        num_swaps: scalar corruption level used by ``get_sample_from_num_swaps``.
-        network: network object providing ``<region>_num_subregions``,
-            ``<region>_size_subregions``, ``<region>_sparsity``, and
-            ``<region>_size``.
-        region: region name whose subregions define the effective SNR.
-            Defaults to ``"mtl"``.
-        return_per_subregion: if True, also return the per-subregion SNR values.
-        sleep: if True, use ``<region>_sparsity_sleep`` instead of
-            ``<region>_sparsity``.
-
-    Returns:
-        For scalar ``num_swaps``, returns ``mean_snr``, or
-        ``(mean_snr, per_subregion_snr)`` if ``return_per_subregion=True``.
-        For explicit per-subregion ``num_swaps``, returns the list of
-        per-subregion SNRs directly.
-    """
     num_subregions = int(getattr(network, f"{region}_num_subregions"))
     size_subregions = torch.as_tensor(getattr(network, f"{region}_size_subregions")).detach().cpu().float()
     sparsity_attr = f"{region}_sparsity_sleep" if sleep else f"{region}_sparsity"
@@ -101,110 +151,17 @@ def get_signal_to_noise_ratio(
     return mean_snr
 
 
-def get_sample_from_num_swaps(x_0, num_swaps, regions=None):
-    if regions is None:
-        x = x_0.clone().detach()
-        on_index = x_0.nonzero().squeeze(1)
-        off_index = (x_0 == 0).nonzero().squeeze(1)
-        flip_off = on_index[torch.randperm(len(on_index))[: int(num_swaps)]]
-        flip_on = off_index[torch.randperm(len(off_index))[: int(num_swaps)]]
-        x[flip_off] = 0
-        x[flip_on] = 1
-        return x
-
+def get_sample_from_num_swaps(x_0, num_swaps):
     x = x_0.clone().detach()
-    total_size = sum(len(region) for region in regions)
-
-    if isinstance(num_swaps, (list, tuple, np.ndarray, torch.Tensor)):
-        num_swaps_per_region = [int(v) for v in list(num_swaps)]
-        if len(num_swaps_per_region) != len(regions):
-            raise ValueError(
-                f"Expected one swap count per region ({len(regions)}), got {len(num_swaps_per_region)}."
-            )
-    else:
-        num_swaps_per_region = [
-            round(float(num_swaps) * len(region) / total_size)
-            for region in regions
-        ]
-
-    for region, num_swaps_region in zip(regions, num_swaps_per_region):
-        on_index = region[x_0[region] == 1]
-        off_index = region[x_0[region] == 0]
-
-        max_region_swaps = min(int(num_swaps_region), len(on_index), len(off_index))
-        flip_off = on_index[torch.randperm(len(on_index))[:max_region_swaps]]
-        flip_on = off_index[torch.randperm(len(off_index))[:max_region_swaps]]
-
-        x[flip_off] = 0
-        x[flip_on] = 1
-
+    on_index = x_0.nonzero().squeeze(1)
+    off_index = (x_0 == 0).nonzero().squeeze(1)
+    num_swaps = int(num_swaps)
+    flip_off = on_index[torch.randperm(len(on_index))[:num_swaps]]
+    flip_on = off_index[torch.randperm(len(off_index))[:num_swaps]]
+    x[flip_off] = 0
+    x[flip_on] = 1
     return x
 
-
-
-def _flatten_latents(latents):
-    latents_tensor = torch.as_tensor(latents)
-    if latents_tensor.dim() == 2:
-        return latents_tensor.float()
-    if latents_tensor.dim() == 3:
-        return latents_tensor.reshape(-1, latents_tensor.shape[-1]).float()
-    raise ValueError(
-        "latents must be 2D or 3D. "
-        f"Got shape {tuple(latents_tensor.shape)}."
-    )
-
-
-def get_selectivity(recordings, latents, debug_label=None):
-    recordings_tensor = torch.as_tensor(recordings)
-    if recordings_tensor.dim() != 2:
-        raise ValueError(
-            "recordings must be 2D with shape (samples, neurons). "
-            f"Got shape {tuple(recordings_tensor.shape)}."
-        )
-    _, num_neurons = recordings_tensor.shape
-
-    recordings_flat = recordings_tensor.reshape(-1, num_neurons).float()
-    latents_flat = _flatten_latents(latents)
-
-    if recordings_flat.shape[0] != latents_flat.shape[0]:
-        raise ValueError(
-            "recordings and latents must have the same number of samples after flattening. "
-            f"Got recordings={recordings_flat.shape[0]}, latents={latents_flat.shape[0]}."
-        )
-
-    if debug_label is not None:
-        print(f"{debug_label}: prep_done rec={tuple(recordings_flat.shape)} lat={tuple(latents_flat.shape)}", flush=True)
-
-    # Normalize (zero mean, unit variance), using explicit variance with eps for stability.
-    if debug_label is not None:
-        print(f"{debug_label}: center_start", flush=True)
-    latents_centered = latents_flat - latents_flat.mean(dim=0, keepdim=True)
-    recordings_centered = recordings_flat - recordings_flat.mean(dim=0, keepdim=True)
-    if debug_label is not None:
-        print(f"{debug_label}: center_done", flush=True)
-
-    eps = 1e-8
-    if debug_label is not None:
-        print(f"{debug_label}: scale_start", flush=True)
-    latents_scale = torch.sqrt((latents_centered.pow(2).mean(dim=0, keepdim=True)).clamp_min(eps))
-    recordings_scale = torch.sqrt((recordings_centered.pow(2).mean(dim=0, keepdim=True)).clamp_min(eps))
-    latents_norm = latents_centered / latents_scale
-    recordings_norm = recordings_centered / recordings_scale
-    if debug_label is not None:
-        print(f"{debug_label}: scale_done", flush=True)
-
-
-    # Compute correlation (selectivity): (num_neurons, num_latents)
-    if debug_label is not None:
-        print(f"{debug_label}: matmul_start", flush=True)
-    selectivity = recordings_norm.T @ latents_norm / latents_norm.shape[0]
-    if debug_label is not None:
-        print(f"{debug_label}: matmul_done", flush=True)
-
-    selectivity[torch.isnan(selectivity)] = 0
-
-
-    return selectivity
 
 
 def _mutual_information_discrete(x, y):
@@ -331,25 +288,6 @@ def MI_learning_curve(recordings, ordered_indices, assembly_size, input_latents,
 
 
 def get_mutual_information_most_selective_latent(recordings, latents, selectivity_threshold=0.75):
-    """
-    Compute MI (in bits) between each neuron's activity and the latent feature
-    to which that neuron is maximally selective, keeping only neurons with
-    max selectivity >= selectivity_threshold.
-
-    Args:
-        recordings: tensor/array shaped (T, N) or (D, T, N)
-        latents: tensor/array shaped (T, L) or (D, T, L)
-        selectivity_threshold: float threshold on per-neuron max selectivity
-
-    Returns:
-        dict with:
-            - mutual_information: (K,) tensor of MI values for selected neurons
-            - selected_neuron_indices: (K,) tensor of original neuron indices
-            - selected_latent_indices: (K,) tensor of latent indices per neuron
-            - selected_max_selectivity: (K,) tensor of max selectivity values
-            - selectivity: (N, L) tensor of all selectivities
-            - max_selectivity: (N,) tensor of max selectivities
-    """
     recordings_tensor = torch.as_tensor(recordings)
     latents_tensor = torch.as_tensor(latents)
 
@@ -383,11 +321,9 @@ def get_mutual_information_most_selective_latent(recordings, latents, selectivit
     selected_neuron_mask = max_selectivity >= float(selectivity_threshold)
     selected_neuron_indices = torch.nonzero(selected_neuron_mask, as_tuple=True)[0]
 
-    # Flatten sample axes as in get_selectivity.
     recordings_flat = recordings_for_selectivity.reshape(-1, recordings_for_selectivity.shape[-1])
     latents_flat = latents_for_selectivity.reshape(-1, latents_for_selectivity.shape[-1])
 
-    # Neural activity is binary in this model family; keep robust binarization.
     recordings_binary = (recordings_flat > 0).int().cpu().numpy()
     latents_values = latents_flat.cpu().numpy()
 
@@ -432,96 +368,6 @@ def get_mutual_information_most_selective_latent(recordings, latents, selectivit
 
 
 
-def get_ordered_indices(
-    recordings,
-    latents,
-    assembly_size,
-    seed=None,
-    debug_label=None,
-    assemblies_only=True,
-):
-    """
-    Constructs neuron assemblies by repeatedly drafting the best remaining neuron
-    for each latent in a round-robin order.
-
-    At each round, a latent permutation is sampled. Traversing that order, each
-    latent claims the currently most selective neuron still available in the
-    global pool. Claimed neurons are removed from the pool immediately. The
-    procedure stops once every latent has exactly ``assembly_size`` neurons.
-    Any leftover neurons are appended afterwards, preserving a full permutation
-    of the original neuron indices.
-
-    Args:
-        recordings: (T, N) activity tensor
-        latents: binary latent indicators, shape (T, L) or (D, T, L)
-        assembly_size: number of neurons per latent group
-        seed: random seed (optional)
-
-    Returns:
-        selectivity: (N, L) selectivity tensor
-        flat_indices: ordered neuron indices. By default this contains only the
-            drafted assembly neurons, with shape ``(L * assembly_size,)``.
-            If ``assemblies_only=False``, leftover neurons are appended to
-            return a full permutation of the original indices.
-    """
-    if debug_label is not None:
-        print(f"{debug_label}: selectivity_start", flush=True)
-    selectivity = get_selectivity(recordings, latents, debug_label=debug_label)
-    if debug_label is not None:
-        print(f"{debug_label}: selectivity_done shape={tuple(selectivity.shape)}", flush=True)
-    N, L = selectivity.shape
-
-    if N < L * int(assembly_size):
-        raise ValueError(
-            f"Not enough neurons ({N}) to assign {assembly_size} neurons to each of {L} latents."
-        )
-
-    generator = None
-    if seed is not None:
-        generator = torch.Generator(device=selectivity.device)
-        generator.manual_seed(int(seed))
-
-    assemblies = [[] for _ in range(L)]
-    available = torch.ones(N, dtype=torch.bool, device=selectivity.device)
-
-    for round_idx in range(int(assembly_size)):
-        if debug_label is not None and (round_idx == 0 or round_idx == int(assembly_size) - 1):
-            print(f"{debug_label}: round_robin_round={round_idx+1}/{int(assembly_size)}", flush=True)
-        latent_order = torch.randperm(L, generator=generator, device=selectivity.device)
-        available_indices = torch.nonzero(available, as_tuple=False).flatten()
-        if available_indices.numel() < L:
-            raise RuntimeError(
-                "Available neuron pool was exhausted before all assemblies were filled."
-            )
-
-        scores = selectivity[available_indices][:, latent_order]
-        claimed_positions = []
-        claimed_neurons = []
-
-        for order_idx in range(L):
-            latent_scores = scores[:, order_idx]
-            if claimed_positions:
-                latent_scores = latent_scores.clone()
-                latent_scores[torch.tensor(claimed_positions, device=latent_scores.device)] = -torch.inf
-            best_pos = torch.argmax(latent_scores)
-            claimed_positions.append(int(best_pos.item()))
-            claimed_neurons.append(int(available_indices[best_pos].item()))
-
-        for latent_idx, neuron_idx in zip(latent_order.tolist(), claimed_neurons):
-            assemblies[latent_idx].append(neuron_idx)
-            available[neuron_idx] = False
-
-    flat_indices = [neuron for assembly in assemblies for neuron in assembly]
-    if not assemblies_only:
-        leftover_neurons = torch.nonzero(available, as_tuple=False).flatten().tolist()
-        flat_indices.extend(leftover_neurons)
-    if debug_label is not None:
-        print(f"{debug_label}: ordering_done", flush=True)
-    return selectivity, torch.tensor(flat_indices, dtype=torch.long)
-
-
-
-
 def get_accuracy(recordings, latents, assembly_size):
 
     T, N = recordings.shape
@@ -532,151 +378,12 @@ def get_accuracy(recordings, latents, assembly_size):
     pred_A = torch.argmax(recordings_grouped[:, :L//2], dim=1)
     pred_B = torch.argmax(recordings_grouped[:, L//2:], dim=1)
 
-    # Compute accuracy for A and B
     acc_A = (pred_A == latents[:, 0]).float().mean()
     acc_B = (pred_B == latents[:, 1]).float().mean()
 
     accuracies = torch.tensor([acc_A, acc_B], device=recordings.device)
 
     return accuracies
-
-
-def get_group_accuracy(recordings, labels, assembly_size, num_groups=None):
-    recordings_tensor = torch.as_tensor(recordings)
-    labels_tensor = torch.as_tensor(labels).long().reshape(-1)
-
-    if recordings_tensor.dim() != 2:
-        raise ValueError(
-            "recordings must be 2D with shape (samples, neurons). "
-            f"Got shape {tuple(recordings_tensor.shape)}."
-        )
-    if recordings_tensor.shape[0] != labels_tensor.shape[0]:
-        raise ValueError(
-            "recordings and labels must have the same number of samples. "
-            f"Got recordings={recordings_tensor.shape[0]}, labels={labels_tensor.shape[0]}."
-        )
-
-    total_groups = recordings_tensor.shape[1] // int(assembly_size)
-    if num_groups is None:
-        num_groups = total_groups
-    if total_groups < int(num_groups):
-        raise ValueError(
-            f"Requested num_groups={int(num_groups)} but recordings only contain {total_groups} groups."
-        )
-
-    grouped = recordings_tensor[:, : int(num_groups) * int(assembly_size)].view(
-        recordings_tensor.shape[0], int(num_groups), int(assembly_size)
-    ).mean(dim=2)
-    pred = torch.argmax(grouped, dim=1)
-    return (pred == labels_tensor).float().mean()
-
-
-def get_ordered_accuracy(
-    recordings,
-    binary_latents,
-    labels,
-    assembly_size,
-    fit_num_samples=None,
-    num_groups=None,
-    debug_label=None,
-    assemblies_only=True,
-):
-    recordings_tensor = torch.as_tensor(recordings).float()
-    binary_latents_flat = _flatten_latents(binary_latents)
-    labels_tensor = torch.as_tensor(labels)
-
-    if recordings_tensor.dim() != 2:
-        raise ValueError(
-            "recordings must be 2D with shape (samples, neurons). "
-            f"Got shape {tuple(recordings_tensor.shape)}."
-        )
-    if recordings_tensor.shape[0] != binary_latents_flat.shape[0]:
-        raise ValueError(
-            "recordings and binary_latents must have the same number of samples. "
-            f"Got recordings={recordings_tensor.shape[0]}, binary_latents={binary_latents_flat.shape[0]}."
-        )
-
-    num_samples = int(recordings_tensor.shape[0])
-    if fit_num_samples is None:
-        fit_num_samples = num_samples // 2
-    test_num_samples = num_samples - int(fit_num_samples)
-    if int(fit_num_samples) <= 0 or test_num_samples <= 0:
-        raise ValueError(
-            "get_ordered_accuracy requires at least two samples split across fit and test. "
-            f"Got num_samples={num_samples}, fit_num_samples={fit_num_samples}."
-        )
-
-    recordings_fit = recordings_tensor[: int(fit_num_samples)]
-    recordings_test = recordings_tensor[int(fit_num_samples):]
-    binary_latents_fit = binary_latents_flat[: int(fit_num_samples)]
-    labels_test = labels_tensor[int(fit_num_samples):]
-
-    if debug_label is not None:
-        print(
-            f"{debug_label}: fit_test_ready "
-            f"fit={tuple(recordings_fit.shape)} test={tuple(recordings_test.shape)}",
-            flush=True,
-        )
-    selectivity, ordered_indices = get_ordered_indices(
-        recordings_fit,
-        binary_latents_fit,
-        assembly_size=assembly_size,
-        debug_label=None if debug_label is None else f"{debug_label}: ordering",
-        assemblies_only=assemblies_only,
-    )
-
-    if num_groups is None:
-        num_groups = binary_latents_fit.shape[-1]
-    ordered_test = recordings_test[:, ordered_indices[: int(num_groups) * int(assembly_size)]]
-    if debug_label is not None:
-        print(
-            f"{debug_label}: ordered_test_ready shape={tuple(ordered_test.shape)} "
-            f"num_groups={int(num_groups)}",
-            flush=True,
-        )
-
-    if labels_test.dim() == 1:
-        accuracy = get_group_accuracy(
-            ordered_test,
-            labels_test,
-            assembly_size=assembly_size,
-            num_groups=num_groups,
-        )
-    elif labels_test.dim() == 2 and labels_test.shape[1] == 2:
-        accuracy = get_accuracy(
-            ordered_test,
-            labels_test,
-            assembly_size=assembly_size,
-        )
-    else:
-        raise ValueError(
-            "labels must be either 1D categorical labels or shape (samples, 2) simple latent labels. "
-            f"Got shape {tuple(labels_test.shape)}."
-        )
-    if debug_label is not None:
-        print(f"{debug_label}: accuracy_done", flush=True)
-
-    return {
-        "accuracy": accuracy,
-        "fit_num_samples": int(fit_num_samples),
-        "test_num_samples": int(test_num_samples),
-        "selectivity": selectivity,
-        "ordered_indices": ordered_indices,
-    }
-
-
-
-def test_network(net, input_params, sleep=True, print_rate=1, true_latent_to_mtl_semantic=False):
-  input, input_episodes, input_latents = make_input(**input_params)
-  with torch.no_grad():
-    for day in range(input_params["num_days"]):
-      if day%print_rate == 0:
-        print(day)
-      latent_day = input_latents[day] if true_latent_to_mtl_semantic else None
-      net(input[day], debug=False, true_latent=latent_day)
-      if sleep:
-        net.sleep()
-  return input, input_episodes, input_latents, net
 
 
 
@@ -687,17 +394,6 @@ def get_cos_sim_np(x1, x2):
 
 
 def get_cos_sim_matrix_torch(A, B, eps=1e-12):
-  """
-  Compute the cosine similarity matrix between two sets of vectors.
-
-  Args:
-      A: tensor of shape ``(n, l)`` or ``(l,)``
-      B: tensor of shape ``(m, l)`` or ``(l,)``
-      eps: numerical stability constant for normalization
-
-  Returns:
-      Tensor of shape ``(n, m)`` with cosine similarities across all pairs.
-  """
   A = torch.as_tensor(A).float()
   B = torch.as_tensor(B).float()
 
@@ -719,25 +415,6 @@ def get_cos_sim_matrix_torch(A, B, eps=1e-12):
 
 
 def get_max_overlap(A, B, return_matrix=False, return_indices=False, eps=1e-12):
-  """
-  Compute row-wise maximum cosine overlap between ``A`` and ``B``.
-
-  Args:
-      A: tensor of shape ``(n, l)`` or ``(l,)``
-      B: tensor of shape ``(m, l)`` or ``(l,)``
-      return_matrix: if ``True``, return the full cosine similarity matrix
-      return_indices: if ``True``, also return the argmax index in ``B`` for
-          each row of ``A``
-      eps: numerical stability constant for normalization
-
-  Returns:
-      If ``return_matrix`` is ``True``, returns the cosine similarity matrix of
-      shape ``(n, m)``.
-
-      Otherwise returns row-wise max cosine similarities of shape ``(n,)``.
-      If the input ``A`` was 1D, returns a scalar tensor. When
-      ``return_indices`` is also ``True``, returns ``(max_vals, max_indices)``.
-  """
   A_tensor = torch.as_tensor(A)
   A_was_vector = A_tensor.dim() == 1
   cos_sim = get_cos_sim_matrix_torch(A, B, eps=eps)
@@ -754,3 +431,28 @@ def get_max_overlap(A, B, return_matrix=False, return_indices=False, eps=1e-12):
   if return_indices:
     return max_vals, max_indices
   return max_vals
+
+
+
+def train_network(
+  net,
+  input_params,
+  sleep=True,
+  print_rate=1,
+  true_latent_to_mtl_semantic=False,
+  scrambled=False,
+):
+  input, input_episodes, input_latents = make_input(**input_params)
+  permutation = None
+  if scrambled:
+    permutation = torch.randperm(net.sen_size)
+  with torch.no_grad():
+    for day in range(input_params["num_days"]):
+      if day%print_rate == 0:
+        print(day)
+      latent_day = input_latents[day] if true_latent_to_mtl_semantic else None
+      day_input = input[day] if permutation is None else input[day, :, permutation]
+      net(day_input, debug=False, true_latent=latent_day)
+      if sleep:
+        net.sleep()
+  return input, input_episodes, input_latents, net

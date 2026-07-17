@@ -15,7 +15,7 @@ from src.utils.episode_generation_protocol import (
 )
 from src.utils.general import (
     get_ordered_indices,
-    test_network,
+    train_network,
     get_cos_sim_matrix_torch,
 )
 
@@ -84,11 +84,30 @@ def higher_order_selectivity(mode, seed, recording_parameters, input_params, lat
     X_episodes = F.one_hot(input_episodes[-100:].long(), num_classes=np.prod(latent_specs["dims"]))
 
 
-    network.selectivity_ctx, network.ordered_indices_ctx = get_ordered_indices(X_ctx[:, :100], X_latent_AB, assembly_size=10)
-    network.selectivity_mtl_semantic, network.ordered_indices_mtl_semantic = get_ordered_indices(X_mtl_semantic, X_latent_AB, assembly_size=10)
-    network.selectivity_mtl_sensory, network.ordered_indices_mtl_sensory = get_ordered_indices(X_mtl_sensory, X_latent_AB, assembly_size=10)
-    network.selectivity_ctx_episodes, network.ordered_indices_ctx_episodes = get_ordered_indices(X_ctx[:, 100:], X_episodes, assembly_size=10)
-    network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_episodes + 100
+    network.selectivity_ctx, network.ordered_indices_ctx = get_ordered_indices(
+        X_ctx[:, :100],
+        X_latent_AB,
+        assembly_size=10,
+    )
+    network.selectivity_mtl_semantic, network.ordered_indices_mtl_semantic = get_ordered_indices(
+        X_mtl_semantic,
+        X_latent_AB,
+        assembly_size=10,
+    )
+    network.selectivity_mtl_sensory, network.ordered_indices_mtl_sensory = get_ordered_indices(
+        X_mtl_sensory,
+        X_latent_AB,
+        assembly_size=10,
+    )
+    network.selectivity_ctx_macro, network.ordered_indices_ctx_macro = get_ordered_indices(
+        X_ctx[:, 100:],
+        X_episodes,
+        assembly_size=10,
+    )
+    # Preserve the legacy global indices used across Figure 4 while also
+    # storing the subregion-local macro-CTX order for plotters.
+    network.selectivity_ctx_episodes = network.selectivity_ctx_macro
+    network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_macro + 100
     network.input_latents_higher_order = input_latents.clone()
     network.input_episodes_higher_order = input_episodes.clone()
     network.input_params_higher_order = {
@@ -205,7 +224,7 @@ def analyze_focal_episode_higher_order_selectivity(
     if mode == "scrambled":
         network.sensory_replay_only = True
 
-    input, input_episodes, input_latents, network = test_network(
+    input, input_episodes, input_latents, network = train_network(
         network,
         input_params_local,
         sleep=True,
@@ -217,12 +236,13 @@ def analyze_focal_episode_higher_order_selectivity(
         input_episodes.long(),
         num_classes=np.prod(latent_specs_local["dims"]),
     ).float()
-    network.selectivity_ctx_episodes, network.ordered_indices_ctx_episodes = get_ordered_indices(
+    network.selectivity_ctx_macro, network.ordered_indices_ctx_macro = get_ordered_indices(
         X_ctx[:, 100:],
         X_episodes,
         assembly_size=assembly_size,
     )
-    network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_episodes + 100
+    network.selectivity_ctx_episodes = network.selectivity_ctx_macro
+    network.ordered_indices_ctx_episodes = network.ordered_indices_ctx_macro + 100
 
     latent_space = LatentSpace(**latent_specs_local)
     results = {

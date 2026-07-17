@@ -13,7 +13,6 @@ def make_input(
     fixed_duration,
     num_swaps,
     latent_space,
-    regions=None,
     satellite=False,
 ):
     from src.utils.general import get_sample_from_num_swaps
@@ -49,7 +48,7 @@ def make_input(
                 input_tensor[
                     day,
                     (day_timestep + pattern_timestep) : (day_timestep + pattern_timestep + 1),
-                ] = get_sample_from_num_swaps(pattern, num_swaps, regions)
+                ] = get_sample_from_num_swaps(pattern, num_swaps)
             day_timestep += pattern_duration
 
     return input_tensor, input_episodes, input_latents

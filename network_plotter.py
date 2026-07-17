@@ -135,6 +135,13 @@ def _resolve_phase_runs(net, wake_sleep: int | str) -> Tuple[str, List[DayRun]]:
 
 def _resolve_recording_index(net, day: int, wake_sleep: int | str, timestep: int) -> Tuple[str, int]:
     phase_name, phase_runs = _resolve_phase_runs(net, wake_sleep=wake_sleep)
+    if len(phase_runs) == 0:
+        raise IndexError(
+            f"Requested day={day} for phase '{phase_name}', but this network has no recorded "
+            f"{phase_name} runs. It was likely saved after recordings were reset. Load a checkpoint "
+            f"that still contains recordings (for example a '*_recordings.pt' companion file)."
+        )
+
     resolved_day = int(day)
     if resolved_day < 0:
         raise IndexError(f"Requested day={day} for phase '{phase_name}', but day must be >= 0.")
@@ -171,28 +178,9 @@ def _get_region_activity(net, region: str, recording_index: int) -> torch.Tensor
 
 
 def _get_full_ctx_order(net, activity_size: int) -> torch.Tensor | None:
-    parts = []
-    seen = set()
-
-    for attr_name in ["ordered_indices_ctx", "ordered_indices_ctx_episodes"]:
-        if not hasattr(net, attr_name):
-            continue
-        indices = getattr(net, attr_name)
-        if not torch.is_tensor(indices):
-            indices = torch.as_tensor(indices)
-        indices = indices.detach().cpu().long().flatten()
-        filtered = []
-        for idx in indices.tolist():
-            if 0 <= idx < activity_size and idx not in seen:
-                filtered.append(idx)
-                seen.add(idx)
-        if filtered:
-            parts.append(torch.tensor(filtered, dtype=torch.long))
-
-    if not parts:
+    ordered = _get_full_region_order(net, "ctx")
+    if ordered is None or int(ordered.numel()) != int(activity_size):
         return None
-
-    ordered = torch.cat(parts, dim=0)
     return ordered
 
 
@@ -244,19 +232,21 @@ def _maybe_reorder(activity: torch.Tensor, ordering: torch.Tensor | None) -> tor
     return activity[ordering.detach().cpu()]
 
 
-def _get_order_attr_name(region: str, subregion_index: int | None = None) -> str | None:
+def _get_order_attr_names(region: str, subregion_index: int | None = None) -> Tuple[str, ...]:
     if region == "ctx":
-        return "ordered_indices_ctx"
+        if subregion_index == 1:
+            return ("ordered_indices_ctx_macro", "ordered_indices_ctx_episodes")
+        return ("ordered_indices_ctx",)
     if region == "mtl_sensory":
-        return "ordered_indices_mtl_sensory"
+        return ("ordered_indices_mtl_sensory",)
     if region == "mtl_semantic":
-        return "ordered_indices_mtl_semantic"
+        return ("ordered_indices_mtl_semantic",)
     if region == "mtl":
         if subregion_index == 0:
-            return "ordered_indices_mtl_sensory"
+            return ("ordered_indices_mtl_sensory",)
         if subregion_index == 1:
-            return "ordered_indices_mtl_semantic"
-    return None
+            return ("ordered_indices_mtl_semantic",)
+    return ()
 
 
 def _get_order_for_selected_indices(
@@ -267,23 +257,35 @@ def _get_order_for_selected_indices(
     subregion_index: int | None = None,
     explicit_order_attr: str | None = None,
 ):
-    order_attr = explicit_order_attr if explicit_order_attr is not None else _get_order_attr_name(region, subregion_index)
-    if order_attr is None or not hasattr(net, order_attr):
-        return None
-
-    ordering = getattr(net, order_attr).detach().cpu().long()
+    order_attrs = (
+        (explicit_order_attr,)
+        if explicit_order_attr is not None
+        else _get_order_attr_names(region, subregion_index)
+    )
     selected_indices = selected_indices.detach().cpu().long()
 
-    # Ordering may already be local to the selected subregion.
-    if ordering.numel() > 0 and int(ordering.max()) < selected_indices.numel() and int(ordering.min()) >= 0:
-        return ordering
+    for order_attr in order_attrs:
+        if not hasattr(net, order_attr):
+            continue
 
-    # Otherwise treat ordering as global and convert to local positions.
-    selected_set = {int(v): idx for idx, v in enumerate(selected_indices.tolist())}
-    local_positions = [selected_set[int(v)] for v in ordering.tolist() if int(v) in selected_set]
-    if not local_positions:
-        return None
-    return torch.tensor(local_positions, dtype=torch.long)
+        ordering = getattr(net, order_attr)
+        if not torch.is_tensor(ordering):
+            ordering = torch.as_tensor(ordering)
+        ordering = ordering.detach().cpu().long().flatten()
+        if ordering.numel() == 0:
+            continue
+
+        # Ordering may already be local to the selected subregion.
+        if int(ordering.min()) >= 0 and int(ordering.max()) < selected_indices.numel():
+            return ordering
+
+        # Otherwise treat ordering as global and convert to local positions.
+        selected_set = {int(v): idx for idx, v in enumerate(selected_indices.tolist())}
+        local_positions = [selected_set[int(v)] for v in ordering.tolist() if int(v) in selected_set]
+        if local_positions:
+            return torch.tensor(local_positions, dtype=torch.long)
+
+    return None
 
 
 def _get_connection_regions(connection: str) -> Tuple[str, str]:
@@ -374,6 +376,14 @@ def _infer_region_snapshot_rows(
 
 def _make_complex_episode_labels() -> List[str]:
     return [f"A{i+1}B{j+1}" for i in range(5) for j in range(5)]
+
+
+def _make_simple_concept_labels_latex() -> List[str]:
+    return [rf"$A_{i+1}$" for i in range(5)] + [rf"$B_{i+1}$" for i in range(5)]
+
+
+def _make_complex_episode_labels_latex() -> List[str]:
+    return [rf"$A_{i+1}B_{j+1}$" for i in range(5) for j in range(5)]
 
 
 def _infer_region_snapshot_y_ticks_labels(
@@ -633,6 +643,40 @@ def _draw_perspective_vertical_separator(
     )
 
 
+def _set_network_snapshot_panel_ticks(
+    ax,
+    *,
+    labels: Sequence[str],
+    perspective: bool,
+    n_rows: int,
+    perspective_kwargs: Dict[str, float] | None = None,
+    rotation: float = 90.0,
+    fontsize: int = 8,
+    xlabel: str | None = None,
+):
+    if perspective:
+        shear_deg_x = (perspective_kwargs or {}).get("shear_deg_x", -18.0)
+        shear = np.tan(np.deg2rad(shear_deg_x))
+        tick_positions = np.arange(len(labels), dtype=float) + 0.5 + shear * float(n_rows)
+    else:
+        tick_positions = np.arange(len(labels), dtype=float)
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(list(labels), rotation=rotation, fontsize=fontsize)
+    ax.tick_params(
+        axis="x",
+        length=0,
+        bottom=False,
+        top=False,
+        labelbottom=True,
+        pad=1,
+    )
+    if xlabel is not None:
+        ax.set_xlabel(xlabel, fontsize=max(fontsize + 2, 10), labelpad=8)
+
+    ax.set_yticks([])
+
+
 def get_network_snapshot(net, day: int, wake_sleep: int | str, timestep: int) -> Dict[str, object]:
     phase_name, recording_index = _resolve_recording_index(
         net,
@@ -641,20 +685,41 @@ def get_network_snapshot(net, day: int, wake_sleep: int | str, timestep: int) ->
         timestep=timestep,
     )
 
-    ctx_order = getattr(net, "ordered_indices_ctx", None)
-    mtl_semantic_order = getattr(net, "ordered_indices_mtl_semantic", None)
-
     ctx = _get_region_activity(net, "ctx", recording_index)
-    mtl_sensory = _get_region_activity(net, "mtl_sensory", recording_index)
-    mtl_semantic = _maybe_reorder(
-        _get_region_activity(net, "mtl_semantic", recording_index),
-        mtl_semantic_order,
+    ctx_subregion_0_indices = _get_region_indices(net, "ctx", subregion_index=0)
+    ctx_subregion_1_indices = _get_region_indices(net, "ctx", subregion_index=1)
+    ctx_subregion_0 = ctx[ctx_subregion_0_indices]
+    ctx_subregion_1 = ctx[ctx_subregion_1_indices]
+    ctx_subregion_0_order = _get_order_for_selected_indices(
+        net,
+        "ctx",
+        ctx_subregion_0_indices,
+        subregion_index=0,
     )
+    ctx_subregion_1_order = _get_order_for_selected_indices(
+        net,
+        "ctx",
+        ctx_subregion_1_indices,
+        subregion_index=1,
+    )
+    ctx_subregion_0 = _maybe_reorder(ctx_subregion_0, ctx_subregion_0_order)
+    ctx_subregion_1 = _maybe_reorder(ctx_subregion_1, ctx_subregion_1_order)
 
-    ctx_subregion_0 = ctx[net.ctx_subregions[0]]
-    ctx_subregion_1 = ctx[net.ctx_subregions[1]]
-    if ctx_order is not None:
-        ctx_subregion_0 = ctx_subregion_0[ctx_order.detach().cpu()[: net.ctx_size_subregions[0]]]
+    mtl_sensory = _get_region_activity(net, "mtl_sensory", recording_index)
+    mtl_sensory_order = _get_order_for_selected_indices(
+        net,
+        "mtl_sensory",
+        _get_region_indices(net, "mtl_sensory", subregion_index=None),
+    )
+    mtl_sensory = _maybe_reorder(mtl_sensory, mtl_sensory_order)
+
+    mtl_semantic = _get_region_activity(net, "mtl_semantic", recording_index)
+    mtl_semantic_order = _get_order_for_selected_indices(
+        net,
+        "mtl_semantic",
+        _get_region_indices(net, "mtl_semantic", subregion_index=None),
+    )
+    mtl_semantic = _maybe_reorder(mtl_semantic, mtl_semantic_order)
 
     return {
         "phase": phase_name,
@@ -1077,6 +1142,7 @@ def plot_network_snapshot(
     show_titles: bool = True,
     perspective: bool = True,
     draw_grid: bool = True,
+    show_labels: bool = True,
 ):
     snapshot = get_network_snapshot(net, day=day, wake_sleep=wake_sleep, timestep=timestep)
     neurons_per_concept = 10
@@ -1162,6 +1228,40 @@ def plot_network_snapshot(
             perspective=perspective,
             perspective_kwargs=perspective_settings[title.lower().replace("-", "_")],
             draw_grid=draw_grid,
+        )
+
+    if show_labels:
+        simple_labels = _make_simple_concept_labels_latex()
+        episode_labels = _make_complex_episode_labels_latex()
+        _set_network_snapshot_panel_ticks(
+            ax_ctx,
+            labels=simple_labels + episode_labels,
+            perspective=perspective,
+            n_rows=ctx_panel.shape[0],
+            perspective_kwargs=perspective_settings["ctx"],
+            rotation=90.0,
+            fontsize=10,
+            xlabel="Concept / Episode",
+        )
+        _set_network_snapshot_panel_ticks(
+            ax_mtl_sensory,
+            labels=simple_labels,
+            perspective=perspective,
+            n_rows=mtl_sensory_panel.shape[0],
+            perspective_kwargs=perspective_settings["mtl_sensory"],
+            rotation=90.0,
+            fontsize=11,
+            xlabel="Concept",
+        )
+        _set_network_snapshot_panel_ticks(
+            ax_mtl_semantic,
+            labels=simple_labels,
+            perspective=perspective,
+            n_rows=mtl_semantic_panel.shape[0],
+            perspective_kwargs=perspective_settings["mtl_semantic"],
+            rotation=90.0,
+            fontsize=11,
+            xlabel="Concept",
         )
 
     if perspective:

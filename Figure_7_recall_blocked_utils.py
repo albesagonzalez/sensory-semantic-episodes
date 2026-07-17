@@ -11,6 +11,7 @@ from src.utils.episode_generation_protocol import (
     make_input,
 )
 from src.utils.general import (
+    get_accuracy,
     get_max_overlap,
     get_ordered_indices,
     get_signal_to_noise_ratio,
@@ -116,7 +117,7 @@ def _get_block_prototype_and_replays(network):
     return prototype, replayed
 
 
-def _run_selectivity_probe(network, num_swaps):
+def _run_accuracy_probe(network, num_swaps):
     input_params = _make_input_parameters(
         num_days=200,
         day_length=80,
@@ -134,6 +135,7 @@ def _run_selectivity_probe(network, num_swaps):
     ctx_awake = torch.stack(network.activity_recordings["ctx"], dim=0)[
         network.awake_indices
     ][-100 * input_params["day_length"] :]
+    eval_latents = input_latents[-100:].reshape(-1, input_latents.shape[-1])
     latent_a = F.one_hot(
         input_latents[-100:, :, 0].long(),
         num_classes=latent_specs["dims"][0],
@@ -142,16 +144,27 @@ def _run_selectivity_probe(network, num_swaps):
         input_latents[-100:, :, 1].long(),
         num_classes=latent_specs["dims"][1],
     )
-    latent_ab = torch.cat((latent_a, latent_b), dim=2)
+    latent_ab = torch.cat((latent_a, latent_b), dim=2).reshape(-1, latent_a.shape[-1] + latent_b.shape[-1])
+    fit_num_samples = ctx_awake.shape[0] // 2
+    if fit_num_samples < 1 or fit_num_samples >= ctx_awake.shape[0]:
+        raise ValueError(
+            "Accuracy probe requires at least two recorded awake samples "
+            f"to split fit/test data, got {ctx_awake.shape[0]}."
+        )
 
     selectivity_ctx, ordered_indices_ctx = get_ordered_indices(
-        ctx_awake,
-        latent_ab,
+        ctx_awake[:fit_num_samples],
+        latent_ab[:fit_num_samples],
         assembly_size=10,
     )
     network.selectivity_ctx = selectivity_ctx
     network.ordered_indices_ctx = ordered_indices_ctx
-    return network, selectivity_ctx.max(dim=1)[0].detach().cpu()
+    ctx_accuracy = get_accuracy(
+        ctx_awake[fit_num_samples:, ordered_indices_ctx[:100]],
+        eval_latents[fit_num_samples:],
+        assembly_size=10,
+    )
+    return network, ctx_accuracy.detach().cpu()
 
 
 def run_blocked_interleaved_noise_point(seed, num_swaps, network_parameters):
@@ -204,7 +217,7 @@ def run_blocked_interleaved_noise_point(seed, num_swaps, network_parameters):
     ]
     max_overlaps_blocked = torch.cat(blocked_overlap_tensors, dim=0)
 
-    blocked_network, sel_blocked = _run_selectivity_probe(blocked_network, num_swaps)
+    blocked_network, acc_blocked = _run_accuracy_probe(blocked_network, num_swaps)
 
     interleaved_input_params = _make_input_parameters(
         num_days=100,
@@ -230,7 +243,7 @@ def run_blocked_interleaved_noise_point(seed, num_swaps, network_parameters):
         prototypes,
     ).detach().cpu()
 
-    interleaved_network, sel_interleaved = _run_selectivity_probe(
+    interleaved_network, acc_interleaved = _run_accuracy_probe(
         interleaved_network,
         num_swaps,
     )
@@ -243,10 +256,10 @@ def run_blocked_interleaved_noise_point(seed, num_swaps, network_parameters):
         ),
         "max_overlaps_blocked": max_overlaps_blocked.tolist(),
         "max_overlaps_interleaved": max_overlaps_interleaved.tolist(),
-        "sel_blocked": sel_blocked.tolist(),
-        "sel_interleaved": sel_interleaved.tolist(),
+        "acc_blocked": acc_blocked.tolist(),
+        "acc_interleaved": acc_interleaved.tolist(),
         "mean_overlap_blocked": float(max_overlaps_blocked.mean().item()),
         "mean_overlap_interleaved": float(max_overlaps_interleaved.mean().item()),
-        "mean_selectivity_blocked": float(sel_blocked[:100].mean().item()),
-        "mean_selectivity_interleaved": float(sel_interleaved[:100].mean().item()),
+        "mean_accuracy_blocked": float(acc_blocked.mean().item()),
+        "mean_accuracy_interleaved": float(acc_interleaved.mean().item()),
     }

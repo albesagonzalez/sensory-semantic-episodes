@@ -113,30 +113,19 @@ class SSCNetwork(nn.Module):
           self.homeostasis('ctx', 'ctx')
 
         else:
-          #semantic_load = torch.randint(low=1, high=self.max_semantic_load_replay+1, size=(1,))[0]
           semantic_load = semantic_load_schedule[timestep]
           self.mtl = self.mtl_generate(semantic_load)
           self.mtl_sensory = self.mtl[:self.mtl_sensory_size].clone()
           self.mtl_semantic = self.mtl[self.mtl_sensory_size:].clone()
           self.ctx_hat = F.linear(self.mtl, self.ctx_mtl) + self.ctx_b*self.ctx_IM
           self.ctx, _ = self.activation(self.ctx_hat, 'ctx', subregion_index=semantic_load-1, sleep=True)
-          ctx_pointer = self.ctx.clone()
 
           self.hebbian('ctx', 'mtl')
 
-          if semantic_load == 1:
-            self.hebbian('ctx', 'ctx', sleep=True)
-
           if semantic_load == self.max_semantic_load_replay:
-            IM = getattr(self, 'ctx' + '_IM')
-            ctx_pointer_definition, _ = self.activation(self.ctx_hat, 'ctx')
-            IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/ (self.ctx_size_subregions*self.ctx_sparsity).sum()
-            lmbda = IM_lmbda*IM          
-            lmbda = lmbda[None, :]
-            delta_ctx_ctx = 10*lmbda*torch.outer(ctx_pointer_definition, ctx_pointer)
-            self.ctx_pointer_definition = ctx_pointer_definition
-            self.ctx_ctx += delta_ctx_ctx
-
+             self.ctx, _ = self.activation(self.ctx_hat, 'ctx')
+            
+          self.hebbian('ctx', 'ctx', sleep=True)
 
           self.homeostasis('ctx', 'mtl')
           self.homeostasis('ctx', 'ctx')
@@ -176,9 +165,7 @@ class SSCNetwork(nn.Module):
       x_sparsity = x_sparsity if sparsity is None else sparsity 
       x_subregions = getattr(self, region + '_subregions')
 
-      if sleep:
-        subregional_input = [x[subregion].sum() for subregion in x_subregions]
-        subregion_index = torch.topk(torch.tensor(subregional_input), 1).indices.int() if subregion_index is None else subregion_index
+      if subregion_index is not None:
         subregion = x_subregions[subregion_index]
         x_subregion = torch.zeros_like(subregion).float()
         top_indices = torch.topk(x[subregion], int(len(subregion)*x_sparsity[subregion_index])).indices
@@ -186,9 +173,9 @@ class SSCNetwork(nn.Module):
         x_prime[subregion]  = x_subregion
 
       else:
-        for subregion_index, subregion in enumerate(x_subregions):
+        for subregion_index_, subregion in enumerate(x_subregions):
           x_subregion = torch.zeros_like(subregion).float()
-          top_indices = torch.topk(x[subregion], int(len(subregion)*x_sparsity[subregion_index])).indices
+          top_indices = torch.topk(x[subregion], int(len(subregion)*x_sparsity[subregion_index_])).indices
           x_subregion[top_indices] = 1
           x_prime[subregion]  = x_subregion
 
@@ -239,7 +226,7 @@ class SSCNetwork(nn.Module):
 
           if w_name in {'ctx_mtl', 'mtl_semantic_ctx'}:
             IM = getattr(self, post_region + '_IM')
-            IM_lmbda = 10*getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
+            IM_lmbda = getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
             lmbda = lmbda*(1 - IM) + IM_lmbda*IM
             lmbda = lmbda[:, None]
 

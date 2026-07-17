@@ -17,16 +17,87 @@ from src.utils.episode_generation_protocol import (
 from src.utils.general import (
     get_accuracy,
     get_max_overlap,
-    get_ordered_accuracy,
     get_ordered_indices,
     get_signal_to_noise_ratio,
-    test_network,
+    train_network,
 )
 
 def seed_everything(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+
+def get_ordered_accuracy(
+    recordings,
+    binary_latents,
+    labels,
+    assembly_size,
+    fit_num_samples=None,
+    num_groups=None,
+    debug_label=None,
+    assemblies_only=True,
+):
+    recordings_tensor = torch.as_tensor(recordings).float()
+    binary_latents_flat = torch.as_tensor(binary_latents).reshape(-1, torch.as_tensor(binary_latents).shape[-1]).float()
+    labels_tensor = torch.as_tensor(labels)
+
+    num_samples = int(recordings_tensor.shape[0])
+    if fit_num_samples is None:
+        fit_num_samples = num_samples // 2
+    test_num_samples = num_samples - int(fit_num_samples)
+
+    recordings_fit = recordings_tensor[: int(fit_num_samples)]
+    recordings_test = recordings_tensor[int(fit_num_samples):]
+    binary_latents_fit = binary_latents_flat[: int(fit_num_samples)]
+    labels_test = labels_tensor[int(fit_num_samples):]
+
+    if debug_label is not None:
+        print(
+            f"{debug_label}: fit_test_ready "
+            f"fit={tuple(recordings_fit.shape)} test={tuple(recordings_test.shape)}",
+            flush=True,
+        )
+    selectivity, ordered_indices = get_ordered_indices(
+        recordings_fit,
+        binary_latents_fit,
+        assembly_size=assembly_size,
+        debug_label=None if debug_label is None else f"{debug_label}: ordering",
+        assemblies_only=assemblies_only,
+    )
+
+    if num_groups is None:
+        num_groups = binary_latents_fit.shape[-1]
+    ordered_test = recordings_test[:, ordered_indices[: int(num_groups) * int(assembly_size)]]
+    if debug_label is not None:
+        print(
+            f"{debug_label}: ordered_test_ready shape={tuple(ordered_test.shape)} "
+            f"num_groups={int(num_groups)}",
+            flush=True,
+        )
+
+    if labels_test.dim() == 1:
+        grouped = ordered_test.view(
+            ordered_test.shape[0], int(num_groups), int(assembly_size)
+        ).mean(dim=2)
+        accuracy = (torch.argmax(grouped, dim=1) == labels_test.long().reshape(-1)).float().mean()
+    else:
+        accuracy = get_accuracy(
+            ordered_test,
+            labels_test,
+            assembly_size=assembly_size,
+        )
+
+    if debug_label is not None:
+        print(f"{debug_label}: accuracy_done", flush=True)
+
+    return {
+        "accuracy": accuracy,
+        "fit_num_samples": int(fit_num_samples),
+        "test_num_samples": int(test_num_samples),
+        "selectivity": selectivity,
+        "ordered_indices": ordered_indices,
+    }
 
 
 def _make_recording_params(regions=None):
@@ -67,7 +138,7 @@ def _run_network_with_progress(
     true_latent_to_mtl_semantic=False,
 ):
     if not verbose:
-        return test_network(
+        return train_network(
             net,
             input_params,
             sleep=sleep,
