@@ -10,7 +10,7 @@ from src.utils.episode_generation_protocol import (
     make_input,
 )
 
-def get_selectivity(recordings, latents, debug_label=None):
+def get_selectivity(recordings, latents, debug_label=None, chunk_size=64):
     recordings_tensor = torch.as_tensor(recordings).float()
     latents_tensor = torch.as_tensor(latents).float()
 
@@ -26,7 +26,17 @@ def get_selectivity(recordings, latents, debug_label=None):
     latents_norm = latents_centered / latents_scale
     recordings_norm = recordings_centered / recordings_scale
 
-    selectivity = recordings_norm.T @ latents_norm / latents_norm.shape[0]
+    num_neurons = int(recordings_norm.shape[1])
+    selectivity = torch.empty(
+        (num_neurons, int(latents_norm.shape[1])),
+        dtype=recordings_norm.dtype,
+        device=recordings_norm.device,
+    )
+    for start in range(0, num_neurons, int(chunk_size)):
+        end = min(start + int(chunk_size), num_neurons)
+        selectivity[start:end] = (
+            recordings_norm[:, start:end].T @ latents_norm / latents_norm.shape[0]
+        )
     selectivity[torch.isnan(selectivity)] = 0
 
     return selectivity
@@ -446,9 +456,10 @@ def train_network(
   permutation = None
   if scrambled:
     permutation = torch.randperm(net.sen_size)
+  should_print = print_rate not in [None, np.inf]
   with torch.no_grad():
     for day in range(input_params["num_days"]):
-      if day%print_rate == 0:
+      if should_print and day % int(print_rate) == 0:
         print(day)
       latent_day = input_latents[day] if true_latent_to_mtl_semantic else None
       day_input = input[day] if permutation is None else input[day, :, permutation]
