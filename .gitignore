@@ -8,12 +8,16 @@ __pycache__/
 .venv/
 venv/
 
-# Project outputs and large local artifacts
-checkpoints/*
-!checkpoints/.gitkeep
+# Local data, checkpoints, and generated figures. Keep only the directory
+# placeholders so a fresh clone has the expected output locations.
 Data/*
 !Data/.gitkeep
+!Data/checkpoints/
+Data/checkpoints/*
+!Data/checkpoints/.gitkeep
+
 Figures/*
 !Figures/.gitkeep
-Figures_SVG/*
-!Figures_SVG/.gitkeep
+!Figures/SVG/
+Figures/SVG/*
+!Figures/SVG/.gitkeep
