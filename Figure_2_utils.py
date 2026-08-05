@@ -1,6 +1,4 @@
 import multiprocessing
-import random
-
 from copy import deepcopy
 
 import matplotlib.pyplot as plt
@@ -9,13 +7,7 @@ import torch
 
 from src.model import SSCNetwork
 from src.utils.episode_generation_protocol import LatentSpace
-from src.utils.general import train_network
-
-
-def seed_everything(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+from src.utils.general import seed_everything, train_network
 
 
 def _get_concept_names(latent_space):

@@ -1,4 +1,3 @@
-import random
 from copy import deepcopy
 
 import numpy as np
@@ -11,7 +10,7 @@ from src.utils.episode_generation_protocol import (
     LatentSpace,
     make_input,
 )
-from src.utils.general import get_cos_sim_torch, get_sample_from_num_swaps
+from src.utils.general import get_cos_sim_torch, get_sample_from_num_swaps, seed_everything
 
 
 class SparseHopfieldNetwork(nn.Module):
@@ -53,11 +52,7 @@ class SparseHopfieldNetwork(nn.Module):
             pattern_centered = pattern - activity
             weights += torch.outer(pattern_centered, pattern_centered)
         self.mtl_sensory_mtl_sensory = weights / norm
-
-        #for pattern in patterns:
-        #    weights += torch.outer(pattern, pattern) 
-        #self.mtl_sensory_mtl_sensory = weights/patterns.shape[1]
-
+        
         self.mtl_sensory_mtl_sensory.fill_diagonal_(0)
 
     def pattern_complete(
@@ -101,134 +96,242 @@ def sample_random_mtl_sensory_patterns(num_patterns, pattern_size, pattern_spars
     return patterns
 
 
-def _seed_everything(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+def count_unique_presented_concepts(input_latents, dims=None):
+    """Count distinct latent-factor values encountered in a sequence."""
+    input_latents = torch.as_tensor(input_latents).reshape(-1, input_latents.shape[-1])
+    unique_count = sum(
+        int(torch.unique(input_latents[:, latent_idx]).numel())
+        for latent_idx in range(input_latents.shape[1])
+    )
+    if dims is not None:
+        unique_count = min(unique_count, int(sum(dims)))
+    return unique_count
 
 
-def _apply_network_mode(network, network_mode):
-    if network_mode == "semantics_present":
-        return network
-    if network_mode == "semantics_absent":
-        network.sensory_replay_only = True
-        return network
-    if network_mode == "semantics_random":
-        network.lesioned = {"mtl_semantic"}
-        return network
-    raise ValueError(f"Unknown network_mode: {network_mode!r}")
+def sample_random_mtl_patterns(num_patterns, size_subregions, sparsity_subregions):
+    """Sample fixed-sparsity random patterns across all MTL subregions."""
+    size_subregions = [int(size) for size in size_subregions]
+    sparsity_subregions = [float(sparsity) for sparsity in sparsity_subregions]
+    patterns = torch.zeros((int(num_patterns), int(sum(size_subregions))))
 
+    start = 0
+    for subregion_size, subregion_sparsity in zip(
+        size_subregions, sparsity_subregions
+    ):
+        num_active = int(subregion_size * subregion_sparsity)
+        for pattern_idx in range(int(num_patterns)):
+            active_idx = torch.randperm(subregion_size)[:num_active] + start
+            patterns[pattern_idx, active_idx] = 1
+        start += subregion_size
 
-def _instantiate_capacity_network(
-    network_source,
-    network_type,
-    network_mode,
-    rec_params,
-):
-    if network_type == "ssc":
-        if isinstance(network_source, str):
-            network = torch.load(network_source, weights_only=False)
-            network.init_recordings(rec_params)
-        elif isinstance(network_source, SSCNetwork):
-            network = deepcopy(network_source)
-            network.init_recordings(rec_params)
-        else:
-            network = SSCNetwork(deepcopy(network_source), rec_params)
-
-        network = _apply_network_mode(network, network_mode)
-        network.frozen = False
-        if hasattr(network, "activity_recordings_rate"):
-            network.activity_recordings_rate = rec_params.get("rate_activity", np.inf)
-        if hasattr(network, "connectivity_recordings_rate"):
-            network.connectivity_recordings_rate = rec_params.get("rate_connectivity", np.inf)
-        return network
-
-    if network_type == "sparse_hopfield":
-        return SparseHopfieldNetwork(deepcopy(network_source), rec_params)
-
-    raise ValueError(f"Unknown network_type: {network_type!r}")
-
-
-def _build_structured_input_params(input_generation, num_patterns):
-    input_params = deepcopy(input_generation)
-    latent_specs = input_params.pop("latent_specs", None)
-
-    if latent_specs is not None and "latent_space" not in input_params:
-        input_params["latent_space"] = LatentSpace(**deepcopy(latent_specs))
-
-    input_params["num_days"] = 1
-    if "day_length" not in input_params:
-        mean_duration = int(input_params.get("mean_duration", 1))
-        input_params["day_length"] = int(mean_duration * num_patterns)
-
-    return input_params
+    return patterns
 
 
 def get_capacity_recall(
-    network_source,
+    net_params,
     num_patterns,
     seed,
-    network_type="ssc",
+    network_architecture="ssc",
+    recall_region="mtl_sensory",
     network_mode="semantics_present",
     input_generation="random",
+    cue_num_swaps=4,
 ):
-    _seed_everything(seed)
+    """Store one set of patterns and quantify recall in the Figure 6A assay."""
+    seed_everything(seed)
 
-    record_mtl_sensory = isinstance(input_generation, dict) and network_type == "ssc"
+    record_structured_activity = (
+        isinstance(input_generation, dict) and network_architecture == "ssc"
+    )
     rec_params = {
-        "regions": ["mtl_sensory"] if record_mtl_sensory else [],
-        "rate_activity": 1 if record_mtl_sensory else np.inf,
+        "regions": ["mtl_sensory", "mtl_semantic"]
+        if record_structured_activity
+        else [],
+        "rate_activity": 1 if record_structured_activity else np.inf,
         "connections": [],
         "rate_connectivity": np.inf,
     }
 
-    network = _instantiate_capacity_network(
-        network_source=network_source,
-        network_type=network_type,
-        network_mode=network_mode,
-        rec_params=rec_params,
-    )
+    if network_architecture == "ssc":
+        if isinstance(net_params, str):
+            network = torch.load(net_params, weights_only=False)
+            network.init_recordings(rec_params)
+        elif isinstance(net_params, SSCNetwork):
+            network = deepcopy(net_params)
+            network.init_recordings(rec_params)
+        else:
+            network = SSCNetwork(deepcopy(net_params), rec_params)
+
+        effective_recall_region = recall_region
+        if network_mode == "semantics_absent":
+            effective_recall_region = "mtl_sensory"
+        elif network_mode == "semantics_random":
+            network.lesioned = {"mtl_semantic"}
+        elif network_mode != "semantics_present":
+            raise ValueError(f"Unknown network_mode: {network_mode!r}")
+
+        network.frozen = False
+        if hasattr(network, "activity_recordings_rate"):
+            network.activity_recordings_rate = rec_params["rate_activity"]
+        if hasattr(network, "connectivity_recordings_rate"):
+            network.connectivity_recordings_rate = rec_params["rate_connectivity"]
+    else:
+        network = SparseHopfieldNetwork(deepcopy(net_params), rec_params)
+        effective_recall_region = recall_region
 
     with torch.no_grad():
+        semantic_patterns = None
+        num_unique_concepts_shown = np.nan
+
         if input_generation == "random":
-            patterns = sample_random_mtl_sensory_patterns(
-                num_patterns=num_patterns,
-                pattern_size=network.mtl_sensory_size,
-                pattern_sparsity=network.mtl_sensory_sparsity[0],
-            )
-            network.mtl_sensory_mtl_sensory.zero_()
-            network(patterns)
-            network.mtl_sensory_mtl_sensory.fill_diagonal_(0)
+            if (
+                network_architecture == "ssc"
+                and effective_recall_region == "mtl_sensory"
+            ):
+                patterns = sample_random_mtl_sensory_patterns(
+                    num_patterns=num_patterns,
+                    pattern_size=network.mtl_sensory_size,
+                    pattern_sparsity=network.mtl_sensory_sparsity[0],
+                )
+                network.mtl_sensory_mtl_sensory.zero_()
+                network(patterns)
+                network.mtl_sensory_mtl_sensory.fill_diagonal_(0)
+            elif network_architecture == "ssc" and effective_recall_region == "mtl":
+                patterns = sample_random_mtl_patterns(
+                    num_patterns=num_patterns,
+                    size_subregions=network.mtl_size_subregions,
+                    sparsity_subregions=network.mtl_sparsity,
+                )
+                network.mtl_mtl.zero_()
+                network.lesioned = {"mtl_semantic"}
+                for pattern in patterns:
+                    network.mtl = pattern.clone()
+                    network.hebbian("mtl", "mtl")
+                    network.homeostasis("mtl", "mtl")
+                network.mtl_mtl.fill_diagonal_(0)
+            else:
+                patterns = sample_random_mtl_sensory_patterns(
+                    num_patterns=num_patterns,
+                    pattern_size=network.mtl_sensory_size,
+                    pattern_sparsity=network.mtl_sensory_sparsity[0],
+                )
+                network.mtl_sensory_mtl_sensory.zero_()
+                network(patterns)
+                network.mtl_sensory_mtl_sensory.fill_diagonal_(0)
         elif isinstance(input_generation, dict):
-            if network_type != "ssc":
+            if network_architecture != "ssc":
                 raise ValueError(
-                    "Structured input_generation is only supported for network_type='ssc'."
+                    "Structured input_generation is only supported for "
+                    "network_architecture='ssc'."
                 )
 
-            input_params = _build_structured_input_params(
-                input_generation=input_generation,
-                num_patterns=num_patterns,
-            )
-            input_tensor, _, _ = make_input(**input_params)
+            input_params = deepcopy(input_generation)
+            latent_specs = input_params.pop("latent_specs", None)
+            if latent_specs is not None and "latent_space" not in input_params:
+                input_params["latent_space"] = LatentSpace(**deepcopy(latent_specs))
+
+            input_params.setdefault("num_days", 1)
+            if "day_length" not in input_params:
+                input_params["day_length"] = int(
+                    input_params.get("mean_duration", 1) * num_patterns
+                )
+
+            input_tensor, _, input_latents = make_input(**input_params)
             network(input_tensor[0], debug=False)
-            if input_params.get("sleep_after_day", True):
-                network.sleep()
-            patterns = torch.stack(network.activity_recordings["mtl_sensory"], dim=0)[
-                network.awake_indices
-            ].clone()
-            network.mtl_sensory_mtl_sensory.fill_diagonal_(0)
+            num_unique_concepts_shown = count_unique_presented_concepts(
+                input_latents,
+                dims=latent_specs["dims"] if latent_specs is not None else None,
+            )
+            sensory_patterns = torch.stack(
+                network.activity_recordings["mtl_sensory"], dim=0
+            )[network.awake_indices].clone()
+            semantic_patterns = torch.stack(
+                network.activity_recordings["mtl_semantic"], dim=0
+            )[network.awake_indices].clone()
+            if network_mode == "semantics_absent":
+                semantic_patterns = None
+
+            if effective_recall_region == "mtl_sensory":
+                patterns = sensory_patterns
+                network.mtl_sensory_mtl_sensory.fill_diagonal_(0)
+            else:
+                patterns = torch.cat((sensory_patterns, semantic_patterns), dim=1)
+                network.mtl_mtl.fill_diagonal_(0)
         else:
             raise ValueError(
-                "input_generation must be 'random' or a dictionary of input-generation parameters."
+                "input_generation must be 'random' or a dictionary of "
+                "input-generation parameters."
             )
 
-        recalls = []
-        for pattern in patterns:
-            recalled = network.pattern_complete(
-                "mtl_sensory",
-                h_0=get_sample_from_num_swaps(pattern.clone(), num_swaps=0),
-                num_iterations=network.mtl_sensory_pattern_complete_iterations,
+        mtl_sensory_recalls = []
+        mtl_semantic_recalls = []
+        mtl_recalls = []
+        for pattern_idx, pattern in enumerate(patterns):
+            cue = get_sample_from_num_swaps(
+                pattern.clone(), num_swaps=int(cue_num_swaps)
             )
-            recalls.append(get_cos_sim_torch(recalled, pattern).item())
 
-    return float(torch.tensor(recalls).nanmean().item())
+            if network_architecture == "sparse_hopfield":
+                recalled_sensory = network.pattern_complete(
+                    "mtl_sensory",
+                    h_0=cue,
+                    num_iterations=network.mtl_sensory_pattern_complete_iterations,
+                )
+                mtl_sensory_recalls.append(
+                    get_cos_sim_torch(recalled_sensory, pattern).item()
+                )
+            elif effective_recall_region == "mtl_sensory":
+                recalled_sensory = network.pattern_complete(
+                    "mtl_sensory",
+                    h_0=cue,
+                    num_iterations=network.mtl_sensory_pattern_complete_iterations,
+                )
+                mtl_sensory_recalls.append(
+                    get_cos_sim_torch(recalled_sensory, pattern).item()
+                )
+            else:
+                if input_generation == "random":
+                    mtl_0 = cue
+                else:
+                    mtl_0 = torch.zeros(network.mtl_size)
+                    mtl_0[: network.mtl_sensory_size] = cue[
+                        : network.mtl_sensory_size
+                    ]
+
+                recalled = network.pattern_complete(
+                    "mtl",
+                    h_0=mtl_0,
+                    num_iterations=network.mtl_pattern_complete_iterations,
+                )
+                recalled_sensory = recalled[: network.mtl_sensory_size]
+                mtl_sensory_recalls.append(
+                    get_cos_sim_torch(
+                        recalled_sensory, pattern[: network.mtl_sensory_size]
+                    ).item()
+                )
+                mtl_recalls.append(get_cos_sim_torch(recalled, pattern).item())
+
+                if semantic_patterns is not None:
+                    recalled_semantic = recalled[network.mtl_sensory_size :]
+                    mtl_semantic_recalls.append(
+                        get_cos_sim_torch(
+                            recalled_semantic, semantic_patterns[pattern_idx]
+                        ).item()
+                    )
+
+    return {
+        "recalled_mtl_sensory_cosine_mean": float(
+            torch.tensor(mtl_sensory_recalls).nanmean().item()
+        ),
+        "recalled_mtl_semantic_cosine_mean": (
+            float(torch.tensor(mtl_semantic_recalls).nanmean().item())
+            if mtl_semantic_recalls
+            else np.nan
+        ),
+        "recalled_mtl_cosine_mean": (
+            float(torch.tensor(mtl_recalls).nanmean().item())
+            if mtl_recalls
+            else np.nan
+        ),
+        "num_unique_concepts_shown": num_unique_concepts_shown,
+    }

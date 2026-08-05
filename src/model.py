@@ -55,7 +55,6 @@ class SSCNetwork(nn.Module):
 
               #only after phase A mtl_semantic_mtl_semantic is used
                self.hebbian('mtl_semantic', 'mtl_semantic')
-               self.homeostasis('mtl_semantic', 'mtl_semantic')
 
             #if MTL is developed (after phase B), mtl_semantic to ctx
             if self.day >= self.duration_phase_B and "mtl_semantic" not in self.lesioned:
@@ -66,10 +65,7 @@ class SSCNetwork(nn.Module):
             #learn mtl_mtl, mtl_sensory_mtl_sensory and ctx_ctx
 
             self.hebbian('mtl', 'mtl')
-            self.homeostasis('mtl', 'mtl')
-
             self.hebbian('mtl_sensory', 'mtl_sensory')
-            self.homeostasis('mtl_sensory', 'mtl_sensory')
 
             self.hebbian('ctx', 'ctx')
             self.homeostasis('ctx', 'ctx')
@@ -135,7 +131,7 @@ class SSCNetwork(nn.Module):
         self.sleep_indices_A.append(self.time_index)
 
       #then semantic replay
-      if self.day >= self.duration_phase_A:
+      if self.day > self.duration_phase_A:
 
         for timestep in range(self.sleep_duration_B):
 
@@ -226,14 +222,14 @@ class SSCNetwork(nn.Module):
 
           if w_name in {'ctx_mtl', 'mtl_semantic_ctx'}:
             IM = getattr(self, post_region + '_IM')
-            IM_lmbda = getattr(self, 'max_post_' + w_name)/ torch.sum(getattr(self, pre_region))
+            IM_lmbda = getattr(self, 'max_post_' + w_name)/torch.sum(getattr(self, pre_region))
             lmbda = lmbda*(1 - IM) + IM_lmbda*IM
             lmbda = lmbda[:, None]
 
           if w_name == 'ctx_ctx':
             IM = getattr(self, post_region + '_IM')
             if sleep:
-              IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/ (self.ctx_size_subregions*self.ctx_sparsity).sum()
+              IM_lmbda = getattr(self, 'max_pre_ctx_ctx')/torch.sum(getattr(self, post_region))
               lmbda = lmbda*(1 - IM) + IM_lmbda*IM
               lmbda = lmbda[None, :]
             else:

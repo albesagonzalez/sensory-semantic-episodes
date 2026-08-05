@@ -1,7 +1,6 @@
 
 
 import multiprocessing
-import random
 from copy import deepcopy
 
 import numpy as np
@@ -15,18 +14,10 @@ from src.utils.episode_generation_protocol import (
 )
 from src.utils.general import (
     get_ordered_indices,
+    seed_everything,
     train_network,
     get_cos_sim_matrix_torch,
 )
-
-
-def seed_everything(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
-
 
 def higher_order_selectivity(mode, seed, recording_parameters, input_params, latent_specs, initial_network_path, get_network=False):
 
@@ -132,10 +123,23 @@ def _get_episode_names(latent_space):
     return [f"A{label[0] + 1}B{label[1] + 1}" for label in latent_space.index_to_label]
 
 
-def _make_focal_episode_probabilities(num_episodes, focal_index, focal_probability):
+def _make_focal_episode_probabilities(
+    num_episodes,
+    focal_index,
+    focal_probability,
+    remaining_mass_concentration=1.0,
+):
+    if float(remaining_mass_concentration) <= 0:
+        raise ValueError("remaining_mass_concentration must be positive.")
+
     probs = torch.full((num_episodes,), 0.0, dtype=torch.float32)
     if num_episodes > 1 and float(focal_probability) < 1.0:
-        probs[:] = (1.0 - float(focal_probability)) / float(num_episodes - 1)
+        remaining_indices = [idx for idx in range(num_episodes) if idx != int(focal_index)]
+        remaining_probs = torch.distributions.Dirichlet(
+            float(remaining_mass_concentration)
+            * torch.ones(num_episodes - 1, dtype=torch.float32)
+        ).sample()
+        probs[remaining_indices] = (1.0 - float(focal_probability)) * remaining_probs
     probs[int(focal_index)] = float(focal_probability)
     return probs.tolist()
 
@@ -191,6 +195,7 @@ def analyze_focal_episode_higher_order_selectivity(
     focal_probability_grid=None,
     formation_threshold=0.5,
     assembly_size=10,
+    remaining_mass_concentration=1.0,
     get_network=False,
 ):
     seed_everything(seed)
@@ -210,6 +215,7 @@ def analyze_focal_episode_higher_order_selectivity(
         num_episodes=num_episodes,
         focal_index=focal_episode_index,
         focal_probability=focal_probability,
+        remaining_mass_concentration=remaining_mass_concentration,
     )
     input_params_local["num_days"] = 1
     input_params_local["latent_space"] = LatentSpace(**latent_specs_local)
@@ -250,6 +256,7 @@ def analyze_focal_episode_higher_order_selectivity(
         "focal_episode_index": focal_episode_index,
         "focal_episode_probability": focal_probability,
         "focal_probability_grid": focal_probability_grid.tolist(),
+        "remaining_mass_concentration": float(remaining_mass_concentration),
         "formation_threshold": float(formation_threshold),
         "assembly_size": int(assembly_size),
     }
@@ -288,6 +295,7 @@ def analyze_focal_episode_higher_order_selectivity_many_seeds(
     focal_probability_grid=None,
     formation_threshold=0.5,
     assembly_size=10,
+    remaining_mass_concentration=1.0,
     num_cpu=None,
     start_method="fork",
 ):
@@ -303,6 +311,7 @@ def analyze_focal_episode_higher_order_selectivity_many_seeds(
             focal_probability_grid,
             formation_threshold,
             assembly_size,
+            remaining_mass_concentration,
             False,
         )
         for seed in seeds

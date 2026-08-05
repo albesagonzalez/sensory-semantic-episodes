@@ -2,6 +2,28 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap
+
+
+blue = "#0073B7"
+yellow = "#FFD23F"
+gray_dark = "#7A7A7A"
+gray = "#C0C0C0"
+purple = "#B05AA3"
+green = "#00A651"
+orange = "#F7941D"
+blue_distribution = "#00AEEF"
+red_distribution = "#F15A2A"
+
+blue_yellow = LinearSegmentedColormap.from_list("blue_yellow", [blue, yellow])
+gray_purple = LinearSegmentedColormap.from_list("gray_purple", [gray, purple])
+
+noise_curve_colors = {
+    1: "#C6DBEF",
+    10: "#6BAED6",
+    30: "#08519C",
+    100: "#08306B",
+}
 
 
 

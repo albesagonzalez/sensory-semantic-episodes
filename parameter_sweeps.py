@@ -1,7 +1,6 @@
 from copy import deepcopy
 from itertools import product
 import multiprocessing
-import random
 
 import numpy as np
 import torch
@@ -10,7 +9,7 @@ import torch.nn.functional as F
 from src.model import SSCNetwork
 from src.model_outgoing_ff import SSCNetwork as SSCNetworkOutgoingFF
 from src.utils.episode_generation_protocol import LatentSpace
-from src.utils.general import get_ordered_indices, train_network
+from src.utils.general import get_ordered_indices, seed_everything, train_network
 
 from src.network_parameters import network_parameters
 
@@ -47,12 +46,6 @@ DEFAULT_LATENT_SPECS = {
     "dims": [5, 5],
     "prob_list": [0.5 / 5 if i == j else 0.5 / 20 for i in range(5) for j in range(5)],
 }
-
-
-def seed_everything(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
 
 
 def _mean_max_selectivity(selectivity):

@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +11,12 @@ from src.utils.episode_generation_protocol import (
     LatentSpace,
     make_input,
 )
+
+
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
 def get_selectivity(recordings, latents, debug_label=None, chunk_size=64):
     recordings_tensor = torch.as_tensor(recordings).float()
@@ -298,6 +306,13 @@ def MI_learning_curve(recordings, ordered_indices, assembly_size, input_latents,
 
 
 def get_mutual_information_most_selective_latent(recordings, latents, selectivity_threshold=0.75):
+    """Compute full-recording NMI for each selected neuron's preferred concept.
+
+    Selectivity determines the preferred concept for each neuron.  The NMI
+    calculation itself reuses ``MI_trajectory_per_latent`` with one window that
+    spans the complete recording, so this assay and the learning trajectories
+    share the same empirical MI implementation.
+    """
     recordings_tensor = torch.as_tensor(recordings)
     latents_tensor = torch.as_tensor(latents)
 
@@ -334,35 +349,48 @@ def get_mutual_information_most_selective_latent(recordings, latents, selectivit
     recordings_flat = recordings_for_selectivity.reshape(-1, recordings_for_selectivity.shape[-1])
     latents_flat = latents_for_selectivity.reshape(-1, latents_for_selectivity.shape[-1])
 
-    recordings_binary = (recordings_flat > 0).int().cpu().numpy()
-    latents_values = latents_flat.cpu().numpy()
+    recordings_binary = (recordings_flat > 0).int().cpu()
+    latents_flat_cpu = latents_flat.detach().cpu()
 
     selected_latent_indices = selected_latent_indices_all[selected_neuron_indices]
     selected_max_selectivity = max_selectivity[selected_neuron_indices]
 
-    mutual_information_values = []
-    latent_entropy_values = []
-    normalized_mutual_information_values = []
-    for neuron_idx, latent_idx in zip(selected_neuron_indices.tolist(), selected_latent_indices.tolist()):
-        x = recordings_binary[:, neuron_idx]
-        y = latents_values[:, latent_idx]
-        mi_bits = _mutual_information_discrete(x, y)
-        h_y_bits = _entropy_discrete(y)
-        normalized_mi = mi_bits / h_y_bits if h_y_bits > 0 else 0.0
-        mutual_information_values.append(mi_bits)
-        latent_entropy_values.append(h_y_bits)
-        normalized_mutual_information_values.append(normalized_mi)
-
-    if len(mutual_information_values) == 0:
+    if selected_neuron_indices.numel() == 0:
         mutual_information = torch.zeros(0, dtype=torch.float32)
         latent_entropy = torch.zeros(0, dtype=torch.float32)
         normalized_mutual_information = torch.zeros(0, dtype=torch.float32)
     else:
-        mutual_information = torch.tensor(mutual_information_values, dtype=torch.float32)
-        latent_entropy = torch.tensor(latent_entropy_values, dtype=torch.float32)
-        normalized_mutual_information = torch.tensor(
-            normalized_mutual_information_values, dtype=torch.float32
-        )
+        selected_neuron_indices_cpu = selected_neuron_indices.detach().cpu()
+        selected_latent_indices_cpu = selected_latent_indices.detach().cpu()
+        num_selected = selected_neuron_indices_cpu.numel()
+        mutual_information = torch.zeros(num_selected, dtype=torch.float32)
+        latent_entropy = torch.zeros(num_selected, dtype=torch.float32)
+        normalized_mutual_information = torch.zeros(num_selected, dtype=torch.float32)
+
+        # Neurons can have different preferred concepts.  Grouping them by
+        # concept lets each group share one call to the trajectory helper.
+        for latent_idx in torch.unique(selected_latent_indices_cpu):
+            positions = torch.nonzero(
+                selected_latent_indices_cpu == latent_idx, as_tuple=True
+            )[0]
+            neuron_indices = selected_neuron_indices_cpu[positions]
+            target = latents_flat_cpu[:, int(latent_idx.item())]
+            target_entropy = _entropy_discrete(target.numpy())
+
+            latent_entropy[positions] = target_entropy
+            if target_entropy == 0:
+                continue
+
+            full_recording_nmi = MI_trajectory_per_latent(
+                recordings_binary[:, neuron_indices],
+                target,
+                window_size=recordings_binary.shape[0],
+                stride=recordings_binary.shape[0],
+                normalize="global",
+            )[:, 0]
+            full_recording_nmi = torch.nan_to_num(full_recording_nmi, nan=0.0)
+            normalized_mutual_information[positions] = full_recording_nmi
+            mutual_information[positions] = full_recording_nmi * target_entropy
 
     return {
         "mutual_information": mutual_information,

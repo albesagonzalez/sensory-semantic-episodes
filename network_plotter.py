@@ -4,18 +4,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.transforms import Affine2D
 import numpy as np
 import torch
 
 from src.plotting_parameters import plotting_parameters
-
-
-blue_yellow = LinearSegmentedColormap.from_list(
-    "blue_yellow",
-    ["#0073B7", "#FFD23F"],
-)
+from src.utils.plotting import blue_yellow
 
 
 @dataclass
