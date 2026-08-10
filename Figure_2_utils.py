@@ -6,18 +6,11 @@ import numpy as np
 import torch
 
 from src.model import SSCNetwork
-from src.utils.episode_generation_protocol import LatentSpace
-from src.utils.general import seed_everything, train_network
+from src.utils.episode_generation_protocol import LatentSpace, get_prototypes
+from src.utils.general import get_cos_sim_matrix_torch, seed_everything, train_network
 
 
-def _get_concept_names(latent_space):
-    concept_names = []
-    latent_labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for latent_idx, latent_dim in enumerate(latent_space.dims):
-        prefix = latent_labels[latent_idx] if latent_idx < len(latent_labels) else f"L{latent_idx}"
-        for sub_idx in range(latent_dim):
-            concept_names.append(f"{prefix}{sub_idx + 1}")
-    return concept_names
+_FOCAL_CURVE_WORKER_CONFIG = None
 
 
 def _sample_latent_with_focal_probability(latent_dim, focal_probability, concentration=1.0):
@@ -46,14 +39,19 @@ def _summarize_receptive_fields(network, latent_space):
     mature_ctx_indices = torch.where(mature_mask)[0]
     w_ctx_mtl_mature = network.ctx_mtl[mature_mask, : network.mtl_sensory_size]
 
-    concept_names = _get_concept_names(latent_space)
-    concept_indices = latent_space.sub_index_to_neuron_index
+    concept_prototypes, concept_names = get_prototypes(
+        latent_space,
+        semantic_load=1,
+        return_labels=True,
+    )
     concept_marginals = list(latent_space.sub_index_to_marginal)
 
     if w_ctx_mtl_mature.shape[0] > 0:
-        concept_scores = torch.stack(
-            [w_ctx_mtl_mature[:, neuron_indices].mean(dim=1) for neuron_indices in concept_indices],
-            dim=1,
+        # Match the complex-concept analysis: assign every mature receptive
+        # field to its best-matching denoised prototype, without a threshold.
+        concept_scores = get_cos_sim_matrix_torch(
+            w_ctx_mtl_mature,
+            concept_prototypes,
         )
         winning_concepts = concept_scores.argmax(dim=1)
         neuron_to_concept = {
@@ -83,6 +81,7 @@ def _summarize_receptive_fields(network, latent_space):
         "concept_was_formed": concept_was_formed,
         "concept_formation_pairs": concept_formation_pairs,
         "concept_scores": concept_scores.clone(),
+        "concept_cosine_matrix": concept_scores.clone(),
         "winning_concepts": winning_concepts.clone(),
         "neuron_to_concept": neuron_to_concept,
         "formed_concepts": formed_concepts,
@@ -156,8 +155,6 @@ def analyze_focal_concept_sleep_receptive_fields(
     return_dynamics=False,
     get_network=False,
 ):
-    print(f"starting simulation - {seed}")
-
     seed_everything(seed)
 
     net_params = deepcopy(network_parameters)
@@ -316,6 +313,10 @@ def analyze_focal_concept_sleep_receptive_fields_many_seeds(
         with ctx.Pool(processes=num_cpu) as pool:
             results_list = pool.starmap(analyze_focal_concept_sleep_receptive_fields, experiment_params)
 
+    return _collate_focal_concept_results(results_list)
+
+
+def _collate_focal_concept_results(results_list):
     all_focal_concept_pairs = [
         pair for result in results_list for pair in result["focal_concept_pairs"]
     ]
@@ -330,6 +331,162 @@ def analyze_focal_concept_sleep_receptive_fields_many_seeds(
         "formed_concepts": [result["formed_concepts"] for result in results_list],
         "results_list": results_list,
     }
+
+
+def _analyze_focal_concept_for_sleep_duration(
+    network_parameters,
+    recording_parameters,
+    input_params,
+    latent_specs,
+    sleep_duration_A,
+    sleep_duration_B,
+    seed,
+    focal_probability_grid,
+    concentration,
+    return_dynamics,
+):
+    net_params = deepcopy(network_parameters)
+    net_params["sleep_duration_A"] = int(sleep_duration_A)
+    net_params["sleep_duration_B"] = int(sleep_duration_B)
+    result = analyze_focal_concept_sleep_receptive_fields(
+        net_params,
+        recording_parameters,
+        input_params,
+        latent_specs,
+        seed=seed,
+        focal_probability_grid=focal_probability_grid,
+        concentration=concentration,
+        return_dynamics=return_dynamics,
+        get_network=False,
+    )
+    return int(sleep_duration_A), {
+        "seed": result["seed"],
+        "focal_concept_names": result["focal_concept_names"],
+        "focal_concept_probabilities": result["focal_concept_probabilities"],
+        "focal_concept_pairs": result["focal_concept_pairs"],
+        "num_mature": result["num_mature"],
+        "formed_concepts": result["formed_concepts"],
+    }
+
+
+def _initialize_focal_curve_workers(
+    network_parameters,
+    recording_parameters,
+    input_params,
+    latent_specs,
+    sleep_duration_B,
+    focal_probability_grid,
+    concentration,
+    return_dynamics,
+):
+    global _FOCAL_CURVE_WORKER_CONFIG
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    _FOCAL_CURVE_WORKER_CONFIG = {
+        "network_parameters": network_parameters,
+        "recording_parameters": recording_parameters,
+        "input_params": input_params,
+        "latent_specs": latent_specs,
+        "sleep_duration_B": sleep_duration_B,
+        "focal_probability_grid": focal_probability_grid,
+        "concentration": concentration,
+        "return_dynamics": return_dynamics,
+    }
+
+
+def _analyze_focal_concept_for_sleep_duration_from_worker_config(sleep_duration_A, seed):
+    config = _FOCAL_CURVE_WORKER_CONFIG
+    return _analyze_focal_concept_for_sleep_duration(
+        config["network_parameters"],
+        config["recording_parameters"],
+        config["input_params"],
+        config["latent_specs"],
+        sleep_duration_A,
+        config["sleep_duration_B"],
+        seed,
+        config["focal_probability_grid"],
+        config["concentration"],
+        config["return_dynamics"],
+    )
+
+
+def analyze_focal_concept_sleep_receptive_fields_sleep_duration_curves_many_seeds(
+    network_parameters,
+    recording_parameters,
+    input_params,
+    latent_specs,
+    seeds,
+    sleep_duration_A_values,
+    sleep_duration_B=0,
+    focal_probability_grid=None,
+    concentration=1.0,
+    num_cpu=None,
+    return_dynamics=False,
+    start_method="fork",
+):
+    """Run every (Sleep A duration, seed) pair in a single worker pool."""
+    seeds = [int(seed) for seed in np.asarray(seeds).ravel().tolist()]
+    sleep_duration_A_values = list(dict.fromkeys(int(value) for value in sleep_duration_A_values))
+    tasks = [
+        (sleep_duration_A, seed)
+        for sleep_duration_A in sleep_duration_A_values
+        for seed in seeds
+    ]
+
+    if num_cpu == 1:
+        task_results = [
+            _analyze_focal_concept_for_sleep_duration(
+                network_parameters,
+                recording_parameters,
+                input_params,
+                latent_specs,
+                sleep_duration_A,
+                sleep_duration_B,
+                seed,
+                focal_probability_grid,
+                concentration,
+                return_dynamics,
+            )
+            for sleep_duration_A, seed in tasks
+        ]
+    else:
+        ctx = multiprocessing.get_context(start_method) if start_method is not None else multiprocessing
+        with ctx.Pool(
+            processes=num_cpu,
+            initializer=_initialize_focal_curve_workers,
+            initargs=(
+                network_parameters,
+                recording_parameters,
+                input_params,
+                latent_specs,
+                sleep_duration_B,
+                focal_probability_grid,
+                concentration,
+                return_dynamics,
+            ),
+        ) as pool:
+            task_results = pool.starmap(
+                _analyze_focal_concept_for_sleep_duration_from_worker_config, tasks
+            )
+
+    results_by_sleep_duration = {sleep_duration_A: [] for sleep_duration_A in sleep_duration_A_values}
+    for sleep_duration_A, result in task_results:
+        results_by_sleep_duration[sleep_duration_A].append(result)
+
+    curve_results = {}
+    for sleep_duration_A, results_list in results_by_sleep_duration.items():
+        results = _collate_focal_concept_results(results_list)
+        curve_results[sleep_duration_A] = {
+            "sleep_duration_A": sleep_duration_A,
+            "results": results,
+            "discrete": get_discrete_concept_formation_probability(
+                results["all_focal_concept_pairs"]
+            ),
+        }
+    return curve_results
 
 
 def get_binned_concept_formation_probability(concept_formation_pairs, num_bins=10, bin_edges=None):

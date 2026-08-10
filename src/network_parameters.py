@@ -92,6 +92,7 @@ network_parameters["mtl_semantic_mtl_semantic_lmbda"] = 5e-3
 network_parameters["max_pre_mtl_semantic_mtl_semantic"] = np.inf
 network_parameters["max_post_mtl_semantic_mtl_semantic"] = np.inf
 
+network_parameters["ctx_ctx_std"] = 0.1
 network_parameters["ctx_ctx_lmbda"] = 5e-4
 network_parameters["max_pre_ctx_ctx"] = 1.
 network_parameters["max_post_ctx_ctx"] = np.inf

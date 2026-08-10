@@ -148,26 +148,42 @@ def _summarize_complex_receptive_fields(
     network,
     latent_space,
     assembly_size=10,
-    formation_threshold=0.5,
 ):
     episode_names = _get_episode_names(latent_space)
     episode_probabilities = [
         float(latent_space.label_to_probs[label]) for label in latent_space.index_to_label
     ]
     episode_prototypes = get_prototypes(latent_space, semantic_load=2)
-    ctx_subregion1_rf = network.ctx_mtl[
-        network.ctx_subregions[1]
-    ][:, network.mtl_sensory_size + network.ordered_indices_mtl_semantic].detach()
-    episode_cosine = get_cos_sim_matrix_torch(
-        episode_prototypes,
-        ctx_subregion1_rf,
-    )
-    max_episode_cosine = episode_cosine.max(dim=1).values
+    complex_ctx_indices = network.ctx_subregions[1]
+    mature_mask = network.ctx_IM[complex_ctx_indices] == 0
+    mature_complex_ctx_indices = complex_ctx_indices[mature_mask]
+    ctx_subregion1_rf = network.ctx_mtl[mature_complex_ctx_indices][
+        :, network.mtl_sensory_size + network.ordered_indices_mtl_semantic
+    ].detach()
 
-    episode_scores = [float(score.item()) for score in max_episode_cosine]
+    if ctx_subregion1_rf.shape[0] > 0:
+        # As in the simple-concept analysis, every mature receptive field is
+        # assigned to its best-matching prototype. A concept is formed when at
+        # least one mature neuron selects it; no similarity threshold is used.
+        neuron_episode_cosine = get_cos_sim_matrix_torch(
+            ctx_subregion1_rf,
+            episode_prototypes,
+        )
+        winning_episodes = neuron_episode_cosine.argmax(dim=1)
+        formed_episode_indices = set(winning_episodes.tolist())
+        episode_scores = [
+            float(neuron_episode_cosine[:, episode_idx].max().item())
+            for episode_idx in range(len(episode_names))
+        ]
+    else:
+        neuron_episode_cosine = torch.empty((0, len(episode_names)))
+        winning_episodes = torch.empty((0,), dtype=torch.long)
+        formed_episode_indices = set()
+        episode_scores = [float("nan")] * len(episode_names)
+
     episode_was_formed = {
-        episode_name: int(score >= float(formation_threshold))
-        for episode_name, score in zip(episode_names, episode_scores)
+        episode_name: int(episode_idx in formed_episode_indices)
+        for episode_idx, episode_name in enumerate(episode_names)
     }
 
     episode_formation_pairs = [
@@ -181,7 +197,9 @@ def _summarize_complex_receptive_fields(
         "episode_scores": episode_scores,
         "episode_was_formed": episode_was_formed,
         "episode_formation_pairs": episode_formation_pairs,
-        "episode_cosine_matrix": episode_cosine.clone(),
+        "episode_cosine_matrix": neuron_episode_cosine.clone(),
+        "mature_complex_ctx_indices": mature_complex_ctx_indices.clone(),
+        "winning_episodes": winning_episodes.clone(),
     }
 
 
@@ -193,7 +211,6 @@ def analyze_focal_episode_higher_order_selectivity(
     initial_network_path,
     seed=42,
     focal_probability_grid=None,
-    formation_threshold=0.5,
     assembly_size=10,
     remaining_mass_concentration=1.0,
     get_network=False,
@@ -257,7 +274,6 @@ def analyze_focal_episode_higher_order_selectivity(
         "focal_episode_probability": focal_probability,
         "focal_probability_grid": focal_probability_grid.tolist(),
         "remaining_mass_concentration": float(remaining_mass_concentration),
-        "formation_threshold": float(formation_threshold),
         "assembly_size": int(assembly_size),
     }
     results.update(
@@ -265,7 +281,6 @@ def analyze_focal_episode_higher_order_selectivity(
             network=network,
             latent_space=latent_space,
             assembly_size=assembly_size,
-            formation_threshold=formation_threshold,
         )
     )
 
@@ -293,7 +308,6 @@ def analyze_focal_episode_higher_order_selectivity_many_seeds(
     initial_network_path,
     seeds,
     focal_probability_grid=None,
-    formation_threshold=0.5,
     assembly_size=10,
     remaining_mass_concentration=1.0,
     num_cpu=None,
@@ -309,7 +323,6 @@ def analyze_focal_episode_higher_order_selectivity_many_seeds(
             initial_network_path,
             seed,
             focal_probability_grid,
-            formation_threshold,
             assembly_size,
             remaining_mass_concentration,
             False,

@@ -346,6 +346,15 @@ class SSCNetwork(nn.Module):
       self.mtl_mtl = torch.zeros((self.mtl_size, self.mtl_size))
 
       self.ctx_ctx = torch.zeros((self.ctx_size, self.ctx_size))
+      #self.ctx_ctx = torch.randn((self.ctx_size, self.ctx_size))*self.ctx_ctx_std
+
+      #self.ctx_ctx = torch.zeros((self.ctx_size, self.ctx_size))
+      #for pre_neuron in range(self.ctx_size):
+      #  self.ctx_ctx[torch.randperm(self.ctx_size)[:30], pre_neuron] = self.max_pre_ctx_ctx/30
+      #self.ctx_ctx = self.ctx_ctx.clone()
+
+
+
 
       if self.mtl_sensory_sen_projection:
         self.mtl_sensory_sen = torch.zeros((self.mtl_sensory_size, self.sen_size))

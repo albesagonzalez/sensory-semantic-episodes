@@ -985,6 +985,7 @@ def run_synaptic_engrams_experiment(
     conditioning_day_length=100,
     conditioning_mean_duration=5,
     conditioning_num_swaps=4,
+    reconditioning_day_length=None,
     extinction_days=1000,
     extinction_day_length=20,
     extinction_mean_duration=5,
@@ -993,7 +994,6 @@ def run_synaptic_engrams_experiment(
     post_extinction_probe_days=100,
     num_stability_seeds=50,
     record_rate_activity=1,
-    fear_probe_fraction=0.25,
 ):
     from src.model import SSCNetwork
 
@@ -1005,7 +1005,7 @@ def run_synaptic_engrams_experiment(
         )
 
     net_params = deepcopy(network_parameters)
-    net_params["duration_phase_A"] = 1
+    net_params["duration_phase_A"] = 0
     net_params["duration_phase_B"] = 1
     net_params["max_semantic_load_replay"] = 2
 
@@ -1040,6 +1040,8 @@ def run_synaptic_engrams_experiment(
     latent_specs["prob_list"] = [0.2 if j == 0 else 0 for i in range(5) for j in range(5)]
     input_params["latent_space"] = LatentSpace(**latent_specs)
     preconditioning_input, _, _ = make_input(**input_params)
+    # Across the full pre-conditioning day, independently permute only the
+    # A/context sensory channel (units 1--50).
     preconditioning_input = _permute_channel(preconditioning_input, 0, 50, seed=seed + 1)
 
 
@@ -1059,13 +1061,14 @@ def run_synaptic_engrams_experiment(
     # extinction trace.
     preconditioning_fear_cells = torch.nonzero(network.ctx_IM[:100] == 0, as_tuple=True)[0]
 
-    # 2. Conditioning: A1 is first paired with a shuffled B, then A1B1
+    # 2. Conditioning: A1 is first paired with a shuffled B, then A1B1.
     latent_specs["prob_list"] = [1 if i == 0 and j == 0 else 0 for i in range(5) for j in range(5)]
     input_params["latent_space"] = LatentSpace(**latent_specs)
     conditioning_input, _, _ = make_input(**input_params)
-    # Permute the US channel only in the first 50 timesteps.
+    # Permute only the B/US sensory channel (units 51--100) during the first
+    # 40 timesteps; the remaining conditioning input is unpermuted A1B1.
     conditioning_input = _permute_channel(
-        conditioning_input, 50, 100, seed=seed + 2, time_start=0, time_end=50
+        conditioning_input, 50, 100, seed=seed + 2, time_start=0, time_end=40
     )
 
     conditioning_awake_start = len(network.awake_indices)
@@ -1127,11 +1130,15 @@ def run_synaptic_engrams_experiment(
         "labels": ctx_ordering.pop("mtl_semantic_labels"),
     }
     # Define the extinction readout from the frozen, pre-extinction concept
-    # probe: the cortical assembly selective for B1 (the fear/US feature).
+    # probe: the cortical A1 (CS) and B1 (fear/US) assemblies.
     # ``simple_ordered_indices`` contains consecutive K-cell blocks ordered by
     # ``simple_labels`` (A1--A5, then B1--B5).
+    a1_block = ctx_ordering["simple_labels"].index(("A", 0))
     b1_block = ctx_ordering["simple_labels"].index(("B", 0))
     simple_assembly_size = ctx_ordering["parameters"]["simple_assembly_size"]
+    cue_cells = ctx_ordering["simple_ordered_indices"][
+        a1_block * simple_assembly_size : (a1_block + 1) * simple_assembly_size
+    ].detach().clone()
     fear_cells = ctx_ordering["simple_ordered_indices"][
         b1_block * simple_assembly_size : (b1_block + 1) * simple_assembly_size
     ].detach().clone()
@@ -1145,6 +1152,11 @@ def run_synaptic_engrams_experiment(
         mean_duration=conditioning_mean_duration,
         num_swaps=conditioning_num_swaps,
     )
+
+    # Preserve the exact post-recall, pre-extinction weights.  Besides making
+    # the stage explicit, this lets the notebook draw the same sampled
+    # synaptic distributions as the full pre-extinction distributions.
+    network_pre_extinction = deepcopy(network)
 
     # Synaptic distributions
     synaptic_distributions = {
@@ -1235,10 +1247,12 @@ def run_synaptic_engrams_experiment(
             "network_0": network_0,
             "network_preconditioning": network_preconditioning,
             "network_conditioning": network_conditioning,
+            "network_pre_extinction": network_pre_extinction,
             "network_naive": network_naive,
             "recording_parameters": recording_parameters,
             "run_extinction": False,
             "fear_cells": fear_cells,
+            "cue_cells": cue_cells,
             "preconditioning_fear_cells": preconditioning_fear_cells,
             "ctx_engram_cells": ctx_engram_cells,
             "ctx_engram_nonfear_cells": ctx_engram_nonfear_cells,
@@ -1251,7 +1265,6 @@ def run_synaptic_engrams_experiment(
             "synaptic_distributions_post_extinction": None,
             "synaptic_distributions_post_extinction_sampled": None,
             "fear_input": torch.empty(0),
-            "fear_probe_index": None,
             "stability_savings": torch.empty(0),
             "stability_naive": torch.empty(0),
             "ctx_ordering": ctx_ordering,
@@ -1274,24 +1287,17 @@ def run_synaptic_engrams_experiment(
     extinction_params["latent_space"] = LatentSpace(**latent_specs)
     extinction_input, _, _ = make_input(**extinction_params)
 
-    if not (0.0 <= float(fear_probe_fraction) <= 1.0):
-        raise ValueError("fear_probe_fraction must be in [0, 1].")
-
     fear_input = torch.zeros(extinction_params["num_days"])
-    recall_len = max(int(ctx_recall.shape[0]), 1)
-    # Match source notebook logic: use an early recall-state cue (index ~25 for len=100),
-    # which corresponds to [-75] in the original hard-coded indexing.
-    fear_probe_index = min(max(int(float(fear_probe_fraction) * recall_len), 0), recall_len - 1)
-    ctx_0 = ctx_recall[fear_probe_index].detach().clone()
 
     extinction_awake_boundaries = [len(network.awake_indices)]
     with torch.no_grad():
         for day in range(extinction_params["num_days"]):
             network(extinction_input[day], debug=False)
             network.sleep()
-            # Total recurrent input that the recalled conditioning pattern
-            # delivers to the pre-extinction B1-selective cortical assembly.
-            fear_input[day] = (network.ctx_ctx[fear_cells] @ ctx_0).sum()
+            # Mean recurrent weight from the pre-extinction A1-selective
+            # cortical assembly onto the pre-extinction B1-selective assembly.
+            # Rows are postsynaptic neurons and columns presynaptic neurons.
+            fear_input[day] = network.ctx_ctx[fear_cells][:, cue_cells].mean()
             extinction_awake_boundaries.append(len(network.awake_indices))
 
     post_extinction_selectivity = _get_frozen_uniform_concept_selectivity(
@@ -1329,32 +1335,59 @@ def run_synaptic_engrams_experiment(
         "mtl_late_extinction": X_mtl_all[late_extinction_start:late_extinction_end].detach().cpu().numpy(),
     }
 
-    # Episode recall stability: post-extinction network vs conditioning-naive checkpoint.
+    # Savings-style stability: both checkpoint copies receive the same awake
+    # A1B1 re-exposure, without sleep.  Each is evaluated using the CTX engram
+    # it recruits during that re-exposure and its own updated recurrent weights.
     stability_savings = torch.zeros(int(num_stability_seeds))
     stability_naive = torch.zeros(int(num_stability_seeds))
+    if reconditioning_day_length is None:
+        reconditioning_day_length = conditioning_day_length
+    if int(reconditioning_day_length) < 1:
+        raise ValueError("reconditioning_day_length must be at least 1.")
+
     recall_probe_params = {
         "num_days": 1,
-        "day_length": int(conditioning_day_length),
+        "day_length": int(reconditioning_day_length),
         "mean_duration": int(conditioning_mean_duration),
         "fixed_duration": True,
         "num_swaps": int(conditioning_num_swaps),
     }
     latent_specs["prob_list"] = [1 if i == 0 and j == 0 else 0 for i in range(5) for j in range(5)]
     recall_probe_params["latent_space"] = LatentSpace(**latent_specs)
-    # Match original notebook speed-up while preserving main-network recordings for plotting.
-    stability_base = deepcopy(network)
-    stability_base.init_recordings(recording_parameters)
+    # Reset recordings on checkpoint templates without modifying the stored
+    # post-extinction or pre-conditioning network states.
+    stability_post_extinction_base = deepcopy(network)
+    stability_preconditioning_base = deepcopy(network_naive)
+    stability_post_extinction_base.init_recordings(recording_parameters)
+    stability_preconditioning_base.init_recordings(recording_parameters)
 
     for s in range(int(num_stability_seeds)):
         seed_everything(s)
-        network_test = deepcopy(stability_base)
         probe_input, _, _ = make_input(**recall_probe_params)
+        network_test = deepcopy(stability_post_extinction_base)
+        network_naive_test = deepcopy(stability_preconditioning_base)
         with torch.no_grad():
+            # Awake learning remains enabled; neither copy receives sleep.
             network_test(probe_input[0], debug=False)
-            ctx_completed_savings = network_test.pattern_complete("ctx", network_test.ctx)
-            ctx_completed_naive = network_naive.pattern_complete("ctx", network_test.ctx)
-            stability_savings[s] = get_cos_sim_torch(network_test.ctx, ctx_completed_savings)
-            stability_naive[s] = get_cos_sim_torch(network_test.ctx, ctx_completed_naive)
+            network_naive_test(probe_input[0], debug=False)
+
+            ctx_test = torch.stack(network_test.activity_recordings["ctx"], dim=0)[
+                network_test.awake_indices
+            ]
+            ctx_naive_test = torch.stack(network_naive_test.activity_recordings["ctx"], dim=0)[
+                network_naive_test.awake_indices
+            ]
+            _, _, ctx_engram_test = _cell_indices_from_mean_activity(
+                network_test, "ctx", ctx_test
+            )
+            _, _, ctx_engram_naive = _cell_indices_from_mean_activity(
+                network_naive_test, "ctx", ctx_naive_test
+            )
+
+            ctx_completed_savings = network_test.pattern_complete("ctx", ctx_engram_test)
+            ctx_completed_naive = network_naive_test.pattern_complete("ctx", ctx_engram_naive)
+            stability_savings[s] = get_cos_sim_torch(ctx_engram_test, ctx_completed_savings)
+            stability_naive[s] = get_cos_sim_torch(ctx_engram_naive, ctx_completed_naive)
 
     summary_rows = [
         {
@@ -1404,10 +1437,12 @@ def run_synaptic_engrams_experiment(
         "network_0": network_0,
         "network_preconditioning": network_preconditioning,
         "network_conditioning": network_conditioning,
+        "network_pre_extinction": network_pre_extinction,
         "network_naive": network_naive,
         "recording_parameters": recording_parameters,
         "run_extinction": True,
         "fear_cells": fear_cells,
+        "cue_cells": cue_cells,
         "preconditioning_fear_cells": preconditioning_fear_cells,
         "ctx_engram_cells": ctx_engram_cells,
         "ctx_engram_nonfear_cells": ctx_engram_nonfear_cells,
@@ -1420,7 +1455,6 @@ def run_synaptic_engrams_experiment(
         "synaptic_distributions_post_extinction": synaptic_distributions_post,
         "synaptic_distributions_post_extinction_sampled": synaptic_distributions_post_sampled,
         "fear_input": fear_input,
-        "fear_probe_index": int(fear_probe_index),
         "stability_savings": stability_savings,
         "stability_naive": stability_naive,
         "ctx_ordering": ctx_ordering,
