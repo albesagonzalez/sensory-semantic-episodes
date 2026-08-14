@@ -2,8 +2,8 @@
 
 This repository contains the code used to generate the analyses and figure panels for the manuscript:
 
-**Albesa-González, A. & Clopath, C. (2025).**  
-**Semantic representations in episodic memory enhance recall and compositional consolidation.**
+**Albesa-González, Albert. & Clopath, Claudia. (2025).**  
+**Learning a shared vocabulary between episodic and semantic memory enhances recall and compositional consolidation**
 
 ## Project structure
 
