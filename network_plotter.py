@@ -409,6 +409,8 @@ def _get_region_display_name(region: str, subregion: int | None = None) -> str:
         subregion_display_names = region_defaults.get("subregion_display_names")
         if subregion_display_names is not None and 0 <= int(subregion) < len(subregion_display_names):
             return str(subregion_display_names[int(subregion)])
+    if region == "mtl_semantic":
+        return "MTL-semantic"
     return region.replace("_", "-").upper()
 
 
