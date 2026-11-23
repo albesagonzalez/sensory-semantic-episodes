@@ -5,6 +5,8 @@ This repository contains the code used to generate the analyses and figure panel
 **Albesa-González, Albert. & Clopath, Claudia. (2025).**  
 **Learning a shared vocabulary between episodic and semantic memory enhances recall and compositional consolidation**
 
+![Graphical abstract showing how episodic and semantic replay build a shared vocabulary that enhances recall and compositional consolidation.](docs/graphical-abstract.png)
+
 ## Project structure
 
 - `Figure_*.ipynb` notebooks reproduce the main figure panels and analyses from the manuscript.
