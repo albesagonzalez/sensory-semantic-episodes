@@ -2,7 +2,7 @@
 
 This repository contains the code used to generate the analyses and figure panels for the manuscript:
 
-**Albesa Gonzalez, Albert & Clopath, Claudia.**
+**Albesa-González, Albert & Clopath, Claudia.**
 
 **Replay builds a shared vocabulary between episodic and semantic memory that enhances recall and consolidation**
 
@@ -56,7 +56,7 @@ Please cite the archived software version and the accompanying manuscript when
 using this code in published work. The machine-readable software citation is in
 [`CITATION.cff`](CITATION.cff).
 
-Albert Albesa Gonzalez and Claudia Clopath. *sensory-semantic-episodes: code for
+Albert Albesa-González and Claudia Clopath. *sensory-semantic-episodes: code for
 Replay builds a shared vocabulary between episodic and semantic memory that
 enhances recall and consolidation*. Version 1.0.0. Zenodo.
 https://doi.org/10.5281/zenodo.24497226
