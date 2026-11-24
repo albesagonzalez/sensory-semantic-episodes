@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: >-
+  Please cite this software and the accompanying manuscript when using the code
+  in published work. The software citation below identifies the archived version.
+type: software
+title: >-
+  sensory-semantic-episodes: code for Replay builds a shared vocabulary between
+  episodic and semantic memory that enhances recall and consolidation
+authors:
+  - family-names: Albesa Gonzalez
+    given-names: Albert
+    affiliation: Sainsbury Wellcome Centre
+  - family-names: Clopath
+    given-names: Claudia
+    affiliation: Imperial College London
+version: 1.0.0
+date-released: 2026-11-24
+doi: 10.5281/zenodo.24497226
+repository-code: https://github.com/albesagonzalez/sensory-semantic-episodes
+license: MIT
+keywords:
+  - systems consolidation
+  - episodic memory
+  - semantic memory
+  - neural replay
+  - computational neuroscience
+abstract: >-
+  Simulation and analysis code for a model of episodic-semantic memory
+  interactions in which bidirectional replay establishes a shared vocabulary
+  between medial temporal lobe and neocortex. The software includes the model,
+  figure notebooks, parameter sweeps, plotting utilities, pinned dependencies,
+  and a notebook execution runner.
