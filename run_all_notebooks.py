@@ -1,7 +1,10 @@
 import argparse
-import shutil
+import importlib.util
+import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
 
 from pathlib import Path
@@ -39,13 +42,13 @@ def parse_args():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=7200,
-        help="Per-cell timeout in seconds passed to nbconvert.",
+        default=21600,
+        help="Per-cell timeout in seconds (default: 21600; -1 disables the limit).",
     )
     parser.add_argument(
         "--kernel-name",
         default=None,
-        help="Optional kernel name override for notebook execution.",
+        help="Use a registered kernel instead of the current Python environment.",
     )
     parser.add_argument(
         "--continue-on-error",
@@ -64,7 +67,6 @@ def build_command(notebook_path, output_dir, timeout, kernel_name=None):
     command = [
         sys.executable,
         "-m",
-        "jupyter",
         "nbconvert",
         "--to",
         "notebook",
@@ -82,19 +84,37 @@ def build_command(notebook_path, output_dir, timeout, kernel_name=None):
 
 
 def run_notebook(notebook_path, output_dir, timeout, kernel_name=None):
-    command = build_command(
-        notebook_path=notebook_path,
-        output_dir=output_dir,
-        timeout=timeout,
-        kernel_name=kernel_name,
-    )
     started = time.time()
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="sensory-semantic-kernel-") as kernel_dir:
+        env = os.environ.copy()
+        if kernel_name is None:
+            # A global/user python3 kernelspec may point outside this environment.
+            # Register a private, temporary kernel without changing user settings.
+            kernel_name = Path(kernel_dir).name
+            spec_dir = Path(kernel_dir) / "kernels" / kernel_name
+            spec_dir.mkdir(parents=True)
+            (spec_dir / "kernel.json").write_text(json.dumps({
+                "argv": [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+                "display_name": "Sensory-semantic episodes (current environment)",
+                "language": "python",
+            }))
+            env["JUPYTER_PATH"] = os.pathsep.join(
+                path for path in [kernel_dir, env.get("JUPYTER_PATH")] if path
+            )
+        command = build_command(
+            notebook_path=notebook_path,
+            output_dir=output_dir,
+            timeout=timeout,
+            kernel_name=kernel_name,
+        )
+        completed = subprocess.run(
+            command,
+            cwd=notebook_path.parent,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     duration = time.time() - started
     log_path = output_dir / f"{notebook_path.stem}.log"
     log_path.write_text(completed.stdout)
@@ -141,8 +161,16 @@ def main():
             print(notebook_name)
         return 0
 
-    if shutil.which("jupyter") is None:
-        print("jupyter is not available in PATH.", file=sys.stderr)
+    required_modules = {
+        "matplotlib": "matplotlib", "numpy": "numpy", "pandas": "pandas",
+        "scipy": "scipy", "sklearn": "scikit-learn", "seaborn": "seaborn",
+        "torch": "torch", "nbconvert": "nbconvert", "ipykernel": "ipykernel",
+    }
+    missing = [package for module, package in required_modules.items()
+               if importlib.util.find_spec(module) is None]
+    if missing:
+        print("Missing dependencies in this Python environment: " + ", ".join(missing), file=sys.stderr)
+        print("Install them with: python -m pip install -r requirements.txt", file=sys.stderr)
         return 2
 
     root = Path(__file__).resolve().parent
@@ -154,6 +182,9 @@ def main():
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    (root / "Data" / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (root / "Figures" / "SVG").mkdir(parents=True, exist_ok=True)
 
     results = []
     for notebook_path in notebook_paths:
@@ -175,7 +206,7 @@ def main():
                 return result["returncode"]
 
     print_summary(results)
-    return 0
+    return 1 if any(result["returncode"] != 0 for result in results) else 0
 
 
 if __name__ == "__main__":
