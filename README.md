@@ -23,4 +23,7 @@ Install the Python dependencies with:
 pip install -r requirements.txt
 ```
 
+After installation, run `python run_all_notebooks.py` from the repository root
+to execute all notebooks in dependency order.
+
 Large data files, checkpoints, and figure assets have been intentionally left out of the online repository and are available upon request.
